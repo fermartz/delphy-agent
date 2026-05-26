@@ -8,6 +8,26 @@ When a decision is later reversed, do not delete the entry — add a new dated e
 
 ---
 
+## 2026-05-26 — Slash-command dispatcher in the chat input
+
+**Decision.** Chat input lines starting with `/<name>` (where `<name>` is one-or-more `[a-zA-Z0-9_-]` characters) are parsed as **built-in commands** and dispatched to local handlers instead of being sent to the LLM. Three commands ship with this slice: `/help` lists registered commands; `/clear` wipes chat history and restarts the session; `/model [<id>]` with no arg opens the settings model picker, with an `<id>` validates against `fetchModels()` then saves + restarts the session. Output renders as `system` chat items (neutral gray italic). Everything that doesn't match the strict `/<alnum>` shape (e.g., `//`, `/ `, `///`, mid-line `/`) falls through to the existing send-to-LLM path. External v1 contract for the three commands + error shapes lives in `docs/SPEC.md` § "Built-in slash commands."
+
+**Why.** Keyboard-driven UX for power users; closes the model-stickiness UX gap from the 2026-05-26 settings slice (typed model change takes effect immediately, no UI clicks, no close+reopen). Establishes the dispatch surface for future commands the compactor decision already names (`/compact <focus>`), MCP-tool commands when those arrive (BACKLOG #6), and user-defined custom commands later. Slash is the established convention across agent CLIs (claude code, codex) and chat tools (slack, discord) — deviating buys nothing.
+
+**Alternatives considered.**
+- **No slash commands; require UI clicks for every action.** Simpler but locks the keyboard-flow UX gap open; future `/compact <focus>` is canonically a slash command.
+- **Custom syntax (e.g., `!model claude-opus-4-7`).** Slash is the established convention; deviating fragments user mental model.
+- **Defer commands until MCP lands** so the surface is unified with MCP tools (BACKLOG #6). Leaves the immediate UX gap open too long; built-ins are local-only and don't conflict with future MCP tools (the collision-handling decision lives with the MCP slice).
+- **Single combined `/restart` + `/clear` command.** Their semantic difference (one wipes history, one preserves it) is meaningful; collapsing them costs more than it saves. We DID defer a separate `/restart` to follow-up, since `/clear` covers the common case and `/model <id>` covers the other.
+
+**Adding a new command.** Each command is a single file under `src/core/commands/` exporting a default `Command` object: `{ name, description, argHelp?, handler(args, ctx) }`. Register the command in `src/core/commands/index.ts` via `registerCommand(cmd)` at module load. The handler receives the parsed args string and a `CommandContext` providing `settings`, `triggerReboot`, `restartSession`, `openSettings`, `saveSettings`, and `fetchModels`. The dispatch seam is `dispatchInput(text, ctx)` in `src/core/commands/dispatch.ts` — App.tsx::handleSubmit is a thin wrapper around it. `parseInput` is the shared parser. `system` chat-item rendering lives in `App.tsx::renderItem`.
+
+**Lives in.** `src/core/commands/*` (types, parser, registry, dispatch, three command files, barrel index, tests); `src/App.tsx` (parseInput-via-dispatchInput integration + `restartSession()` helper + `system` chat-item rendering); `docs/SPEC.md` § "Built-in slash commands" (external contract); this entry (internal implementation guidance).
+
+**Supersession.** None — first slash-command decision. Foundational.
+
+---
+
 ## 2026-05-26 — Settings persistence via `tauri-plugin-store`; supersede settings-file path to `app_data_dir()`
 
 **Decision.** This decision has two coupled parts.

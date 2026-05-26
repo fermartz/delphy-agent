@@ -16,7 +16,8 @@ If a contract here changes in a backward-incompatible way, it requires a version
 | MCP server config | Power users, plugin authors, MCP server publishers | This doc |
 | Settings file | Power users editing config directly | This doc |
 | Session export | Anyone exporting/importing conversation history | This doc |
-| Custom slash commands | Users automating common prompts | This doc *(v1: defer)* |
+| Built-in slash commands | Anyone typing `/<name>` in the chat input | This doc |
+| Custom user-defined slash commands | Users automating common prompts via JSON | This doc *(v1: defer)* |
 | URL scheme (`delphy-agent://`) | Deep links from web / other apps | This doc *(v1: defer)* |
 
 ---
@@ -197,7 +198,29 @@ Exports never contain API keys, OAuth tokens, or MCP env values. If a tool input
 
 ---
 
-## Custom slash commands (v1: defer)
+## Built-in slash commands
+
+Chat input lines that begin with `/<name>` (a leading `/` followed by one-or-more alphanumeric / `-` / `_` characters) are parsed as **built-in commands** and dispatched locally instead of being sent to the LLM. Everything else — including `//`, `/ ` (slash + whitespace), `///`, and any `/` mid-line — is treated as a regular message.
+
+Output is rendered as `system` chat items, visually distinct from user / assistant / runtime-error items (neutral gray, monospace, italic).
+
+### v1 built-in commands
+
+| Name | Arg | Description |
+|------|-----|-------------|
+| `/help` | — | List every registered command with its description. |
+| `/clear` | — | Wipe the chat history and start a fresh session. Emits "Chat cleared." in the now-empty chat. |
+| `/model` | `[<model-id>]` | With no arg, opens the model picker. With a `<model-id>`, validates against the provider's available models (via `fetchModels()`), saves `main_model` to settings, and restarts the session so the new model takes effect on the next message. |
+
+### Error shapes
+
+- Unknown command: `Unknown command: /<name>. Type /help for available commands.`
+- `/model <unknown-id>`: `Model not found: <id>. Type /model (no args) to open the picker and see available models.`
+- `/model <id>` when `fetchModels()` fails (network etc.): `Could not verify model id (<reason>). Saved optimistically; the next message will surface a runtime error if the id is wrong.` The value IS saved + the session restarts; the next chat turn will validate it against the live API.
+
+---
+
+## Custom user-defined slash commands (v1: defer)
 
 Users may want to define reusable prompts as `/foo` commands. Sketch:
 

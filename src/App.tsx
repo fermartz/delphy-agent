@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
+import { type CommandContext, dispatchInput } from "./core/commands";
 import { anthropicProfile } from "./core/providers/anthropic";
 import {
   clearRuntimeKey,
@@ -32,12 +33,24 @@ type ChatItem =
     }
   | { kind: "tool-call"; id: string; name: string; input: unknown }
   | { kind: "tool-result"; id: string; output: unknown; isError?: boolean }
-  | { kind: "runtime-error"; id: string; errorKind: RuntimeErrorKind; message: string };
+  | { kind: "runtime-error"; id: string; errorKind: RuntimeErrorKind; message: string }
+  | { kind: "system"; id: string; text: string };
 
 let itemCounter = 0;
 function nextItemId(): string {
   itemCounter += 1;
   return `i-${itemCounter}`;
+}
+
+async function resolveAnthropicApiKey(): Promise<string | null> {
+  try {
+    const stored = await invoke<string | null>("get_secret", { key: ANTHROPIC_SECRET_KEY });
+    if (stored && stored.length > 0) return stored;
+  } catch {
+    // SECURE_STORAGE_UNAVAILABLE on bare Linux — fall through to runtime.
+  }
+  const runtime = getRuntimeKey();
+  return runtime && runtime.length > 0 ? runtime : null;
 }
 
 function appendTextToInFlight(items: ChatItem[], delta: string): ChatItem[] {
@@ -85,6 +98,15 @@ function App() {
     setReady(false);
     setStreaming(false);
     setKeyInput("");
+    setRebootCounter((c) => c + 1);
+  }
+
+  // Restart the session WITHOUT clearing items. Used by /model <id> so a
+  // model change takes effect on the next message without wiping the user's
+  // visible chat history. Distinct from triggerReboot() which wipes.
+  function restartSession() {
+    setReady(false);
+    setStreaming(false);
     setRebootCounter((c) => c + 1);
   }
 
@@ -178,14 +200,51 @@ function App() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const session = sessionRef.current;
     const trimmed = input.trim();
-    if (!session || !trimmed || streaming) return;
+    if (!trimmed || streaming) return;
 
-    setItems((prev) => [...prev, { kind: "user-text", id: nextItemId(), text: trimmed }]);
     setInput("");
+
+    const ctx: CommandContext = {
+      settings,
+      triggerReboot,
+      restartSession,
+      openSettings,
+      saveSettings: async (partial) => {
+        const updated = await saveSettings(partial);
+        setSettings(updated);
+        return updated;
+      },
+      fetchModels: async () => {
+        const apiKey = await resolveAnthropicApiKey();
+        if (!apiKey) throw new Error("No API key set. Set your API key first via the gear icon.");
+        if (!anthropicProfile.fetchModels) {
+          throw new Error("Model listing is not available for this provider.");
+        }
+        return anthropicProfile.fetchModels(apiKey);
+      },
+    };
+
+    const result = await dispatchInput(trimmed, ctx);
+
+    if (result.kind === "command-result") {
+      setItems((prev) => [
+        ...prev,
+        ...result.items.map((it) => ({
+          kind: "system" as const,
+          id: nextItemId(),
+          text: it.text,
+        })),
+      ]);
+      return;
+    }
+
+    const session = sessionRef.current;
+    if (!session) return;
+
+    setItems((prev) => [...prev, { kind: "user-text", id: nextItemId(), text: result.text }]);
     setStreaming(true);
-    await session.sendMessage(trimmed);
+    await session.sendMessage(result.text);
   }
 
   async function handleApproval(approvalId: string, allowed: boolean) {
@@ -249,20 +308,7 @@ function App() {
     }
     setModelsLoading(true);
     try {
-      // Resolve the API key the same way direct-api.ts does at boot:
-      // keychain first, runtime-key module fallback for Linux without
-      // a Secret Service daemon. Without this, the Linux session-only-key
-      // path falsely reports "set your API key first" even when the key is set.
-      let apiKey: string | null = null;
-      try {
-        apiKey = await invoke<string | null>("get_secret", { key: ANTHROPIC_SECRET_KEY });
-      } catch {
-        // Keychain unavailable (SECURE_STORAGE_UNAVAILABLE on bare Linux);
-        // fall through to runtime key.
-      }
-      if (!apiKey) {
-        apiKey = getRuntimeKey();
-      }
+      const apiKey = await resolveAnthropicApiKey();
       if (!apiKey) {
         setModelsError("Set your API key first to fetch available models.");
         return;
@@ -599,6 +645,8 @@ function labelFor(it: ChatItem): string {
       return "result";
     case "runtime-error":
       return "error";
+    case "system":
+      return "system";
   }
 }
 
@@ -679,6 +727,12 @@ function renderItem(
             </button>
           ) : null}
         </div>
+      );
+    case "system":
+      return (
+        <pre className="font-mono text-xs whitespace-pre-wrap text-neutral-500 italic">
+          {it.text}
+        </pre>
       );
   }
 }
