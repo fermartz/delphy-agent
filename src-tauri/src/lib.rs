@@ -1,4 +1,5 @@
 mod secrets;
+mod themes;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,7 +14,14 @@ pub fn run() {
             secrets::get_secret,
             secrets::set_secret,
             secrets::delete_secret,
+            themes::list_user_themes,
         ])
+        .setup(|app| {
+            if let Err(e) = themes::setup_user_themes_watcher(app) {
+                eprintln!("themes: setup_user_themes_watcher failed: {e}");
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

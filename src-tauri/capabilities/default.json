@@ -9,6 +9,7 @@
     "store:default",
     "allow-get-secret",
     "allow-set-secret",
-    "allow-delete-secret"
+    "allow-delete-secret",
+    "allow-list-user-themes"
   ]
 }

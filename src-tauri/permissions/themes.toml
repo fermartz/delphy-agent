@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-list-user-themes"
+description = "Allows the webview to read user-defined theme JSON files from the app data directory."
+commands.allow = ["list_user_themes"]

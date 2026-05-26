@@ -11,8 +11,13 @@ import {
 } from "./core/providers/anthropic-runtime-key";
 import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
-import type { Settings } from "./core/settings/types";
+import type { ColorMode, Settings } from "./core/settings/types";
 import type { RuntimeErrorKind, Session } from "./core/types";
+import { applyTheme } from "./themes/apply";
+import { injectThemeStyles } from "./themes/inject";
+import { loadAllThemes } from "./themes/loader";
+import type { Theme } from "./themes/types";
+import { subscribeToThemeChanges } from "./themes/watcher";
 
 const ANTHROPIC_SECRET_KEY = "anthropic_api_key";
 
@@ -91,6 +96,13 @@ function App() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [themes, setThemes] = useState<Theme[]>([]);
+  const [themesLoaded, setThemesLoaded] = useState(false);
+  // Bumped by the watcher each time it reloads themes from disk, so the
+  // apply effect re-runs and re-asserts data-theme + .dark even when the
+  // selected_theme / color_mode haven't changed (e.g., the user edited the
+  // currently-active theme's JSON in place).
+  const [themesVersion, setThemesVersion] = useState(0);
   const sessionRef = useRef<Session | null>(null);
 
   function triggerReboot() {
@@ -208,6 +220,54 @@ function App() {
       sessionRef.current = null;
     };
   }, [rebootCounter]);
+
+  // Load themes on mount, inject the <style> rules, then subscribe to live
+  // changes from the user-themes directory. Each watcher event re-loads,
+  // re-injects, and re-applies the current theme.
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    (async () => {
+      const loaded = await loadAllThemes();
+      if (!active) return;
+      injectThemeStyles(loaded);
+      setThemes(loaded);
+      setThemesLoaded(true);
+
+      try {
+        unlisten = await subscribeToThemeChanges(async () => {
+          const updated = await loadAllThemes();
+          if (!active) return;
+          injectThemeStyles(updated);
+          setThemes(updated);
+          setThemesVersion((v) => v + 1);
+        });
+      } catch (err) {
+        // Watcher unavailable (non-Tauri environment, permission denied, etc.) —
+        // themes still work, just no live reload.
+        console.warn("themes: subscribeToThemeChanges failed", err);
+      }
+    })();
+
+    return () => {
+      active = false;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Apply the selected theme + color mode whenever either changes (or after
+  // themes finish loading on boot, or after the watcher reloads themes from
+  // disk). themesVersion is a deliberate effect-trigger — bumping it on a
+  // watcher reload re-runs applyTheme even when selected_theme + color_mode
+  // are unchanged. Returns a cleanup for the "system" mode's matchMedia
+  // listener.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: themesVersion is an effect-trigger (its value isn't read inside the effect, but bumping it must re-assert data-theme + .dark)
+  useEffect(() => {
+    if (!themesLoaded) return;
+    const cleanup = applyTheme(settings.selected_theme, settings.color_mode);
+    return cleanup;
+  }, [themesLoaded, themesVersion, settings.selected_theme, settings.color_mode]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -354,6 +414,20 @@ function App() {
     setTimeout(() => setToast(null), 3500);
   }
 
+  async function handleThemeChange(newThemeId: string) {
+    if (newThemeId === settings.selected_theme) return;
+    const updated = await saveSettings({ selected_theme: newThemeId });
+    setSettings(updated);
+    setToast(`Theme updated — ${newThemeId}.`);
+    setTimeout(() => setToast(null), 2500);
+  }
+
+  async function handleColorModeChange(newMode: ColorMode) {
+    if (newMode === settings.color_mode) return;
+    const updated = await saveSettings({ color_mode: newMode });
+    setSettings(updated);
+  }
+
   const backendLabel =
     backend === "anthropic-api"
       ? "Anthropic (Claude)"
@@ -363,17 +437,17 @@ function App() {
   const inputDisabled = streaming || !ready || (backend === "echo-fallback" && bootError !== null);
 
   return (
-    <main className="flex h-screen flex-col bg-neutral-50 text-neutral-900">
-      <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 text-sm font-medium">
+    <main className="flex h-screen flex-col bg-background text-foreground">
+      <header className="flex items-center justify-between border-b border-border px-4 py-3 text-sm font-medium">
         <span>
           Delphy Agent
-          <span className="ml-2 text-neutral-500">— {backendLabel}</span>
+          <span className="ml-2 text-muted-foreground">— {backendLabel}</span>
         </span>
         <button
           type="button"
           onClick={openSettings}
           aria-label="Open settings"
-          className="rounded p-1 text-neutral-500 hover:bg-neutral-200 hover:text-neutral-900"
+          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -408,7 +482,7 @@ function App() {
 
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {items.length === 0 ? (
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {backend === "anthropic-api"
               ? "Type a message to chat with Claude."
               : "Type a message to see the echo adapter stream."}
@@ -417,7 +491,7 @@ function App() {
           <ul className="space-y-3">
             {items.map((it) => (
               <li key={it.id} className="flex gap-3">
-                <span className="w-20 shrink-0 text-xs uppercase tracking-wide text-neutral-500">
+                <span className="w-20 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
                   {labelFor(it)}
                 </span>
                 <div className="flex-1">{renderItem(it, handleApproval, handleChangeKey)}</div>
@@ -427,14 +501,14 @@ function App() {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t border-neutral-200 px-4 py-3">
+      <form onSubmit={handleSubmit} className="border-t border-border px-4 py-3">
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.currentTarget.value)}
           placeholder={`Message ${backendLabel}...`}
           disabled={inputDisabled}
-          className="w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none disabled:opacity-50"
+          className="w-full rounded border border-input bg-background text-foreground px-3 py-2 text-sm focus:border-ring focus:outline-none disabled:opacity-50"
         />
       </form>
 
@@ -444,14 +518,19 @@ function App() {
           availableModels={availableModels}
           modelsLoading={modelsLoading}
           modelsError={modelsError}
+          themes={themes}
+          selectedThemeId={settings.selected_theme}
+          colorMode={settings.color_mode}
           onSelect={handleModelChange}
+          onThemeChange={handleThemeChange}
+          onColorModeChange={handleColorModeChange}
           onClose={closeSettings}
           onRetry={openSettings}
         />
       ) : null}
 
       {toast ? (
-        <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 rounded bg-neutral-900 px-4 py-2 text-xs text-white shadow-lg">
+        <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 rounded bg-foreground px-4 py-2 text-xs text-background shadow-lg">
           {toast}
         </div>
       ) : null}
@@ -464,7 +543,12 @@ function SettingsModal({
   availableModels,
   modelsLoading,
   modelsError,
+  themes,
+  selectedThemeId,
+  colorMode,
   onSelect,
+  onThemeChange,
+  onColorModeChange,
   onClose,
   onRetry,
 }: {
@@ -472,7 +556,12 @@ function SettingsModal({
   availableModels: string[] | null;
   modelsLoading: boolean;
   modelsError: string | null;
+  themes: Theme[];
+  selectedThemeId: string;
+  colorMode: ColorMode;
   onSelect: (model: string) => void;
+  onThemeChange: (themeId: string) => void;
+  onColorModeChange: (mode: ColorMode) => void;
   onClose: () => void;
   onRetry: () => void;
 }) {
@@ -492,7 +581,7 @@ function SettingsModal({
         aria-label="Settings"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-5 shadow-xl"
+        className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-xl"
       >
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">Settings</h2>
@@ -500,20 +589,20 @@ function SettingsModal({
             type="button"
             onClick={onClose}
             aria-label="Close settings"
-            className="rounded p-1 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             ×
           </button>
         </div>
 
         <div className="mt-4">
-          <div className="text-xs font-medium text-neutral-700">Model</div>
-          <div className="mt-1 text-xs text-neutral-500">
-            Current: <span className="font-mono text-neutral-900">{currentModel}</span>
+          <div className="text-xs font-medium text-foreground">Model</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Current: <span className="font-mono text-foreground">{currentModel}</span>
           </div>
 
           {modelsLoading ? (
-            <div className="mt-3 text-xs text-neutral-500">Loading models…</div>
+            <div className="mt-3 text-xs text-muted-foreground">Loading models…</div>
           ) : modelsError ? (
             <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
               <div>{modelsError}</div>
@@ -530,7 +619,7 @@ function SettingsModal({
               <select
                 value={currentModel}
                 onChange={(e) => onSelect(e.currentTarget.value)}
-                className="mt-3 w-full rounded border border-neutral-300 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
+                className="mt-3 w-full rounded border border-input bg-background text-foreground px-2 py-1 text-sm focus:border-ring focus:outline-none"
               >
                 {/* If the current model isn't in the fetched list (e.g., older saved choice), still show it as an option. */}
                 {availableModels.includes(currentModel) ? null : (
@@ -542,11 +631,52 @@ function SettingsModal({
                   </option>
                 ))}
               </select>
-              <p className="mt-2 text-xs text-neutral-500">
+              <p className="mt-2 text-xs text-muted-foreground">
                 Changes apply when you start a new chat — your current conversation keeps its model.
               </p>
             </>
           ) : null}
+        </div>
+
+        <div className="mt-5">
+          <label htmlFor="theme-select" className="text-xs font-medium text-foreground">
+            Theme
+          </label>
+          <select
+            id="theme-select"
+            value={selectedThemeId}
+            onChange={(e) => onThemeChange(e.currentTarget.value)}
+            disabled={themes.length === 0}
+            className="mt-2 w-full rounded border border-input bg-background text-foreground px-2 py-1 text-sm focus:border-ring focus:outline-none disabled:opacity-50"
+          >
+            {/* If the saved theme isn't in the registry (e.g., deleted user theme), still show it so the user sees what's set. */}
+            {themes.some((t) => t.id === selectedThemeId) ? null : (
+              <option value={selectedThemeId}>{selectedThemeId} (unavailable)</option>
+            )}
+            {themes.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mt-4">
+          <div className="text-xs font-medium text-foreground">Color mode</div>
+          <div className="mt-2 flex gap-4 text-xs text-foreground">
+            {(["light", "dark", "system"] as const).map((mode) => (
+              <label key={mode} className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="color-mode"
+                  value={mode}
+                  checked={colorMode === mode}
+                  onChange={() => onColorModeChange(mode)}
+                />
+                <span className="capitalize">{mode}</span>
+              </label>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -714,7 +844,7 @@ function renderItem(
       );
     case "tool-call":
       return (
-        <div className="font-mono text-xs text-neutral-600">
+        <div className="font-mono text-xs text-muted-foreground">
           → {it.name}({previewPayload(it.input)})
         </div>
       );
@@ -722,7 +852,7 @@ function renderItem(
       return (
         <pre
           className={`font-mono text-xs whitespace-pre-wrap ${
-            it.isError ? "text-red-600" : "text-neutral-700"
+            it.isError ? "text-red-600" : "text-foreground"
           }`}
         >
           {previewPayload(it.output)}
@@ -746,7 +876,7 @@ function renderItem(
       );
     case "system":
       return (
-        <pre className="font-mono text-xs whitespace-pre-wrap text-neutral-500 italic">
+        <pre className="font-mono text-xs whitespace-pre-wrap text-muted-foreground italic">
           {it.text}
         </pre>
       );

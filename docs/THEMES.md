@@ -99,17 +99,21 @@ Anything else in `tokens` is ignored at runtime, but is preserved (useful for fo
 - Cannot be removed by the user, but can be hidden in settings
 
 ### User themes
-- Loaded from `~/.config/delphy-agent/themes/*.json` (macOS / Linux)
-- Loaded from `%APPDATA%/delphy-agent/themes/*.json` (Windows)
-- Scanned at startup and watched for changes (added / modified / removed) — picker updates live
-- A user theme with the same `id` as a built-in **overrides** the built-in (lets users tweak a curated theme without forking the codebase)
+- Loaded from `app_data_dir()/themes/*.json` — the platform-native data directory resolved by Tauri:
+  - macOS: `~/Library/Application Support/app.delphy.agent/themes/`
+  - Linux: `~/.local/share/app.delphy.agent/themes/`
+  - Windows: `%APPDATA%\app.delphy.agent\themes\`
+- The directory is created at first boot if it doesn't exist.
+- Scanned at startup and watched for changes (added / modified / removed) — picker updates live, no app restart needed.
+- A user theme with the same `id` as a built-in **overrides** the built-in (lets users tweak a curated theme without forking the codebase).
+- Path note: an earlier draft of this doc named `~/.config/delphy-agent/themes/`; the implementation uses `app_data_dir()` instead, consistent with the settings-file path decision (see `docs/DECISIONS.md`).
 
 ---
 
 ## Runtime: how a theme is applied
 
 1. **Load:** Loader reads all built-in JSON files + scans the user theme directory.
-2. **Validate:** Each theme is validated against the Zod schema. Invalid themes are dropped with a toast notification naming the file and the error; the rest continue to load.
+2. **Validate:** Each theme is validated against the Zod schema. Invalid themes are dropped with a `console.warn` naming the file and the parse / validation error; the rest continue to load. (A visible-toast variant for theme errors is a future polish slice — for v1, errors are visible in the devtools console.)
 3. **Register:** Valid themes go into an in-memory registry keyed by `id`.
 4. **Inject:** For each registered theme, the loader injects a `<style>` element with rules:
    ```css
@@ -161,8 +165,8 @@ A theme is **accepted with warnings** if:
 
 ## Authoring a theme (user-facing)
 
-1. Copy any built-in theme JSON from the app's data directory as a starting point.
-2. Save it as `~/.config/delphy-agent/themes/<your-id>.json` with a unique `id`.
+1. Copy any built-in theme JSON from `src/themes/builtin/*.json` (or from another user's shared file) as a starting point.
+2. Save it as `<your-id>.json` in the user themes directory (`app_data_dir()/themes/` — see § "Where themes live" for the platform-specific path).
 3. Edit colors. The picker updates live as you save.
 4. Share by sending the file.
 
