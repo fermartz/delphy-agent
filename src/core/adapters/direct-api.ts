@@ -22,6 +22,14 @@ const CHARS_PER_TOKEN_ANTHROPIC = 3.5;
 const CONTEXT_LIMIT_TOKENS = 200_000;
 const CONTEXT_WARN_THRESHOLD = 0.75;
 
+// Auto-compaction trigger (B.2 of v1 direct-API). Compaction fires before the
+// next chat turn when estimated usage crosses AUTO_COMPACT_THRESHOLD of the
+// context window. Anti-thrashing skips the trigger if the most-recent
+// compaction saved less than ANTI_THRASHING_MIN_SAVED_RATIO of tokens —
+// otherwise repeated triggers would churn without condensing.
+const AUTO_COMPACT_THRESHOLD = 0.85;
+const ANTI_THRASHING_MIN_SAVED_RATIO = 0.1;
+
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN_ANTHROPIC);
 }
@@ -135,6 +143,16 @@ class DirectApiSession implements Session {
 
   private currentAbort: AbortController | null = null;
 
+  // Fraction of total tokens saved by the most recent compaction (manual or
+  // auto). Drives the anti-thrashing skip on the next auto-trigger. `null`
+  // means "no compaction has run yet"; treated as "always allow first trigger."
+  private lastCompactionSavedRatio: number | null = null;
+
+  // Re-entry guard for the rare case where a second trigger fires while a
+  // first is still running. Defensive; shouldn't happen under
+  // single-stream-at-a-time, but cheap insurance.
+  private compactionInFlight = false;
+
   constructor(id: string, apiKey: string, modelId: string, auxiliaryModelId: string) {
     this.id = id;
     this.apiKey = apiKey;
@@ -178,7 +196,7 @@ class DirectApiSession implements Session {
         type: "text",
         delta:
           `[delphy:context-warning] Context is near the model limit (${tokensUsed.toLocaleString()} / ${CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens estimated). ` +
-          "Type /compact to summarize older turns and free token budget. Automatic compaction lands in a future slice.\n\n",
+          `Auto-compaction will fire at ${Math.round(AUTO_COMPACT_THRESHOLD * 100)}% of the limit. Type /compact to compact now.\n\n`,
       });
     }
 
@@ -193,7 +211,27 @@ class DirectApiSession implements Session {
       return;
     }
 
+    // Hoist the AbortController creation so auto-compaction can route its
+    // auxiliary call through the same `signal` that `streamText` will use.
+    // `interrupt()` cancels both with one `abort()`.
     this.currentAbort = new AbortController();
+
+    // Auto-compaction trigger (B.2). Conditions:
+    //   - usage over threshold
+    //   - last compaction (if any) saved at least the anti-thrashing minimum
+    //   - no in-flight compaction (defensive)
+    // Failures are swallowed inside runAutoCompaction — the chat turn proceeds
+    // with un-compacted messages and a `system_message` surfaces the error.
+    const allowedByAntiThrashing =
+      this.lastCompactionSavedRatio === null ||
+      this.lastCompactionSavedRatio >= ANTI_THRASHING_MIN_SAVED_RATIO;
+    if (
+      tokensUsed > CONTEXT_LIMIT_TOKENS * AUTO_COMPACT_THRESHOLD &&
+      allowedByAntiThrashing &&
+      !this.compactionInFlight
+    ) {
+      await this.runAutoCompaction();
+    }
     let assistantText = "";
 
     try {
@@ -275,8 +313,53 @@ class DirectApiSession implements Session {
     // No tool surface in v1 — MCP lands in BACKLOG #6. Method exists to satisfy Session contract.
   }
 
+  private async runAutoCompaction(): Promise<void> {
+    this.compactionInFlight = true;
+    this.emitEvent({
+      type: "system_message",
+      text: "Compacting older turns to free context budget…",
+    });
+    try {
+      const preTotalTokens = estimateMessageTokens(this.messages);
+      const aux = new AuxiliaryClient({
+        apiKey: this.apiKey,
+        modelId: this.auxiliaryModelId,
+      });
+      const result = await compactMessages({
+        messages: this.messages,
+        config: DEFAULT_COMPACTOR_CONFIG,
+        aux,
+        signal: this.currentAbort?.signal,
+      });
+      if (result.unchanged) {
+        this.emitEvent({
+          type: "system_message",
+          text: "Auto-compaction skipped — conversation has no compactible middle yet.",
+        });
+        return;
+      }
+      this.messages = result.compactedMessages;
+      this.lastCompactionSavedRatio = clampRatio(
+        result.metrics.estimatedTokensSaved / Math.max(1, preTotalTokens),
+      );
+      this.emitEvent({
+        type: "system_message",
+        text: `Auto-compacted: ${result.metrics.before} → ${result.metrics.after} messages, ~${result.metrics.estimatedTokensSaved.toLocaleString()} tokens saved.`,
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.emitEvent({
+        type: "system_message",
+        text: `Auto-compaction failed (${reason}); continuing with un-compacted history.`,
+      });
+    } finally {
+      this.compactionInFlight = false;
+    }
+  }
+
   async compact(focus?: string): Promise<CompactResult> {
     try {
+      const preTotalTokens = estimateMessageTokens(this.messages);
       const aux = new AuxiliaryClient({
         apiKey: this.apiKey,
         modelId: this.auxiliaryModelId,
@@ -295,6 +378,9 @@ class DirectApiSession implements Session {
         };
       }
       this.messages = result.compactedMessages;
+      this.lastCompactionSavedRatio = clampRatio(
+        result.metrics.estimatedTokensSaved / Math.max(1, preTotalTokens),
+      );
       return {
         before: result.metrics.before,
         after: result.metrics.after,
@@ -304,6 +390,13 @@ class DirectApiSession implements Session {
       return { error: err instanceof Error ? err.message : String(err) };
     }
   }
+}
+
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
 }
 
 let sessionCounter = 0;

@@ -211,7 +211,7 @@ Output is rendered as `system` chat items, visually distinct from user / assista
 | `/help` | — | List every registered command with its description. |
 | `/clear` | — | Wipe the chat history and start a fresh session. Emits "Chat cleared." in the now-empty chat. |
 | `/model` | `[<model-id>]` | With no arg, opens the model picker. With a `<model-id>`, validates against the provider's available models (via `fetchModels()`), saves `main_model` to settings, and restarts the session so the new model takes effect on the next message. |
-| `/compact` | `[<focus>]` | Compress the middle of the current conversation into a single summary message, freeing token budget. With no arg, summarizes generically; with `<focus>`, biases the summary toward the focus topic. Output: `Compacted: <N> → <M> messages, ~<X> tokens saved.` Head messages and the most recent tail (under a token budget) are preserved verbatim. Manual compaction in B.1; automatic threshold-triggered compaction lands in B.2. |
+| `/compact` | `[<focus>]` | Compress the middle of the current conversation into a single summary message, freeing token budget. With no arg, summarizes generically; with `<focus>`, biases the summary toward the focus topic. Output: `Compacted: <N> → <M> messages, ~<X> tokens saved.` Head messages and the most recent tail (under a token budget) are preserved verbatim. Compaction also fires automatically before the next chat turn when estimated usage crosses ~85% of the model's context window, with an anti-thrashing rule that skips if the previous compaction saved less than ~10% of tokens. The auto-trigger surfaces its status via a system message ("Compacting older turns…" then "Auto-compacted: N → M, ~X tokens saved."). |
 
 ### Error shapes
 

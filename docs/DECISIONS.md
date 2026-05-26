@@ -8,6 +8,28 @@ When a decision is later reversed, do not delete the entry — add a new dated e
 
 ---
 
+## 2026-05-26 — Compactor B.2 shipped: automatic threshold-triggered compaction (closes BACKLOG #8 + v1 direct-API)
+
+**Decision.** Direct-API mode now auto-triggers head/middle/tail compaction before the next chat turn when `tokensUsed > CONTEXT_LIMIT_TOKENS * AUTO_COMPACT_THRESHOLD` (default 0.85). The trigger lives in `DirectApiSession.sendMessage`, AFTER appending the user message + computing `tokensUsed`, BEFORE `streamText`. Anti-thrashing (constant `ANTI_THRASHING_MIN_SAVED_RATIO`, default 0.10) skips the trigger if the most recent compaction saved less than 10% of tokens — prevents churn. Manual `/compact` is exempt from anti-thrashing. On auxiliary failure, `runAutoCompaction` catches the error, emits a `system_message` describing the failure, and lets the chat turn proceed with the un-compacted messages array (no dedicated cooldown state — see "alternatives considered"). Auxiliary calls during auto-compaction route through the same `currentAbort` AbortController that `streamText` uses (hoisted to be created at the top of `sendMessage` so the controller exists when `runAutoCompaction` reads its signal); `interrupt()` cancels both via one `abort()` call.
+
+The user-visible feedback surface is a new `AgentEvent` variant `{ type: "system_message"; text: string }`, routed by `App.tsx` to the existing `system` ChatItem renderer (the same neutral-gray-italic item kind shipped by the slash-command slice). Three banners per auto-trigger fire: pre ("Compacting older turns to free context budget…"), post-success ("Auto-compacted: N → M messages, ~X tokens saved."), or post-failure ("Auto-compaction failed (<reason>); continuing with un-compacted history."). Manual `/compact` continues to surface its result via the slash-command dispatcher's existing `system` ChatItem path (one banner with the same metrics format).
+
+**Why.** Closes BACKLOG #8 + v1 direct-API. B.1 shipped the algorithm + manual `/compact`; B.2 adds the trigger logic so long conversations stay bounded without the user noticing the threshold themselves. Anti-thrashing prevents pathological repeated-compaction loops. The new `system_message` variant (rather than reusing the existing `text` event channel) is required because `text` events flow through `appendTextToInFlight` and would concatenate the auto-compaction banner into the streaming assistant reply bubble.
+
+**Alternatives considered.**
+- **Skip auto-trigger; ship v1 with only manual `/compact`.** Leaves the UX gap of users hitting context limits silently. Rejected.
+- **Reuse the existing `text` AgentEvent for auto-compaction banners.** Initially proposed in rev 1 of the B.2 plan; rejected after the round-1 review caught that text events merge into the streaming assistant bubble. New `system_message` event added instead.
+- **Add a separate `compactionAbort` AbortController.** Equivalent functionally to hoisting `currentAbort`; rejected as more complexity for no benefit.
+- **Any form of dedicated failure-cooldown state** (turn-based, time-based, or attempt-counted). Considered in rev 1 of the B.2 plan; rejected after round-1 review: with single-check-per-`sendMessage` design, no flag suppresses anything (cleared at top before the check fires, and there's no in-turn retry to suppress anyway). Swallow-and-proceed already prevents retry loops without needing state.
+- **Configurable threshold (user-facing setting).** Premature — most users don't know what tokens are. Revisit when a real reason surfaces.
+- **Parallelize auxiliary compaction with the user's next stream.** Substantial complexity (partial state, cache invalidation, interruption) for marginal benefit. Rejected — sequential is fine; Haiku is fast.
+
+**Lives in.** `src/core/adapters/direct-api.ts` (constants `AUTO_COMPACT_THRESHOLD` + `ANTI_THRASHING_MIN_SAVED_RATIO`; two private fields `lastCompactionSavedRatio` + `compactionInFlight`; hoisted `currentAbort` creation; trigger check + `runAutoCompaction()` method; minor update to manual `compact()` to set `lastCompactionSavedRatio`); `src/core/types.ts` (`system_message` AgentEvent variant); `src/core/session/compactor.ts` (`compactMessages` extended with optional `signal?: AbortSignal` parameter, threaded to `aux.complete`); `src/App.tsx` (new `case "system_message":` in the event-loop switch, finalizing any in-flight streaming assistant message then appending a `system` ChatItem); `direct-api.test.ts` (4 new tests: below-threshold no-trigger; above-threshold trigger emits pre + post banners; auxiliary failure emits failure banner + chat continues; anti-thrashing skips after low-ratio prior compaction).
+
+**Supersedes.** Closes the pending-in-B.2 portion of the 2026-05-26 "Compactor slice split: B → B.1 + B.2" decision. **v1 direct-API mode is now feature-complete.**
+
+---
+
 ## 2026-05-26 — Compactor slice split: B → B.1 + B.2; compaction mutates `messages` array (not three-tier `context` slot)
 
 **Decision.** This decision has two coupled parts.

@@ -12,6 +12,7 @@ vi.mock("ai", async () => {
   return {
     ...actual,
     streamText: vi.fn(),
+    generateText: vi.fn(),
   };
 });
 
@@ -21,15 +22,27 @@ vi.mock("@ai-sdk/anthropic", () => ({
   }),
 }));
 
+vi.mock("../session/compactor", async () => {
+  const actual =
+    await vi.importActual<typeof import("../session/compactor")>("../session/compactor");
+  return {
+    ...actual,
+    compactMessages: vi.fn(),
+  };
+});
+
 import { invoke } from "@tauri-apps/api/core";
-import { streamText } from "ai";
+import { generateText, streamText } from "ai";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
 import { clearRuntimeKey, getRuntimeKey, setRuntimeKey } from "../providers/anthropic-runtime-key";
+import { compactMessages } from "../session/compactor";
 import type { AgentEvent, Session } from "../types";
 import { BootError, directApiAdapter } from "./direct-api";
 
 const mockedInvoke = vi.mocked(invoke);
 const mockedStreamText = vi.mocked(streamText);
+const mockedGenerateText = vi.mocked(generateText);
+const mockedCompactMessages = vi.mocked(compactMessages);
 
 function fakeStreamResult(
   parts: Array<Record<string, unknown>>,
@@ -64,6 +77,17 @@ async function collectOneTurn(iter: AsyncIterator<AgentEvent>): Promise<AgentEve
 beforeEach(() => {
   mockedInvoke.mockReset();
   mockedStreamText.mockReset();
+  mockedGenerateText.mockReset();
+  mockedCompactMessages.mockReset();
+  // Default: compaction returns unchanged so tests that don't care about the
+  // compactor (the majority) don't accidentally mutate the messages array if
+  // the trigger fires from a large fixture.
+  mockedCompactMessages.mockResolvedValue({
+    unchanged: true,
+    compactedMessages: [],
+    summary: "",
+    metrics: { before: 0, after: 0, estimatedTokensSaved: 0 },
+  } as Any);
   clearRuntimeKey();
 });
 
@@ -247,6 +271,104 @@ describe("directApiAdapter — event mapping", () => {
       content: "how are you?",
     });
 
+    await session.close();
+  });
+});
+
+describe("directApiAdapter — auto-compaction trigger (B.2)", () => {
+  async function startSession(): Promise<Session> {
+    mockedInvoke.mockResolvedValueOnce("sk-ant-test");
+    return directApiAdapter.start({});
+  }
+
+  // ~600K chars / 3.5 ≈ 171K tokens — just above the 200K * 0.85 = 170K
+  // AUTO_COMPACT_THRESHOLD. Enough to fire the trigger in one shot.
+  const HUGE_TEXT = "x".repeat(600_000);
+
+  it("does not auto-trigger when usage is below threshold", async () => {
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+    await session.sendMessage("small message");
+    const events = await collectOneTurn(iter);
+
+    expect(events.filter((e) => e.type === "system_message")).toHaveLength(0);
+    expect(mockedCompactMessages).not.toHaveBeenCalled();
+    await session.close();
+  });
+
+  it("auto-trigger fires when usage exceeds threshold; emits pre + post system_message banners", async () => {
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    mockedCompactMessages.mockResolvedValueOnce({
+      unchanged: false,
+      compactedMessages: [{ role: "user", content: "compacted" }],
+      summary: "summary text",
+      metrics: { before: 10, after: 3, estimatedTokensSaved: 50_000 },
+    } as Any);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+    await session.sendMessage(HUGE_TEXT);
+    const events = await collectOneTurn(iter);
+
+    const systemMessages = events.filter((e) => e.type === "system_message");
+    expect(systemMessages).toHaveLength(2);
+    expect(systemMessages[0].type === "system_message" && systemMessages[0].text).toMatch(
+      /Compacting/,
+    );
+    expect(systemMessages[1].type === "system_message" && systemMessages[1].text).toMatch(
+      /Auto-compacted: 10 → 3 messages/,
+    );
+    expect(mockedCompactMessages).toHaveBeenCalledTimes(1);
+    await session.close();
+  });
+
+  it("auto-trigger failure emits a failure system_message and chat continues normally", async () => {
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    mockedCompactMessages.mockRejectedValueOnce(new Error("aux down"));
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+    await session.sendMessage(HUGE_TEXT);
+    const events = await collectOneTurn(iter);
+
+    const systemMessages = events.filter((e) => e.type === "system_message");
+    // pre-banner + failure banner
+    expect(systemMessages).toHaveLength(2);
+    const last = systemMessages[systemMessages.length - 1];
+    expect(last.type === "system_message" && last.text).toMatch(/Auto-compaction failed.*aux down/);
+    // Chat still produced a normal text event from the mocked stream.
+    expect(events.some((e) => e.type === "text")).toBe(true);
+    expect(events.some((e) => e.type === "done" && e.reason === "complete")).toBe(true);
+    await session.close();
+  });
+
+  it("anti-thrashing: low prior-saved ratio skips the next auto-trigger", async () => {
+    mockedStreamText.mockReturnValue(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    // First compaction succeeds with a tiny saved ratio (100 tokens out of
+    // huge preTotal). lastCompactionSavedRatio ends up well below 0.10.
+    mockedCompactMessages.mockResolvedValueOnce({
+      unchanged: false,
+      compactedMessages: [{ role: "user", content: "still-huge" }],
+      summary: "summary",
+      metrics: { before: 10, after: 3, estimatedTokensSaved: 100 },
+    } as Any);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    // Turn 1: huge message triggers compaction; tiny ratio recorded.
+    await session.sendMessage(HUGE_TEXT);
+    await collectOneTurn(iter);
+    expect(mockedCompactMessages).toHaveBeenCalledTimes(1);
+
+    // Turn 2: another huge message — anti-thrashing should skip the trigger.
+    await session.sendMessage(HUGE_TEXT);
+    const events2 = await collectOneTurn(iter);
+
+    expect(mockedCompactMessages).toHaveBeenCalledTimes(1); // STILL just 1 — no second call
+    expect(events2.filter((e) => e.type === "system_message")).toHaveLength(0);
     await session.close();
   });
 });

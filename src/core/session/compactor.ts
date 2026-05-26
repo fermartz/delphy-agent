@@ -99,11 +99,13 @@ export async function compactMessages({
   config,
   aux,
   focus,
+  signal,
 }: {
   messages: ModelMessage[];
   config: CompactorConfig;
   aux: AuxiliaryClient;
   focus?: string;
+  signal?: AbortSignal;
 }): Promise<CompactionResult> {
   const unchanged = (): CompactionResult => ({
     unchanged: true,
@@ -159,7 +161,10 @@ export async function compactMessages({
   }
 
   // 5. Call auxiliary. Errors propagate to caller (no fallback in B.1).
-  const summary = await aux.complete(userPrompt, { systemPrompt: SUMMARIZER_SYSTEM_PROMPT });
+  const summary = await aux.complete(userPrompt, {
+    systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
+    signal,
+  });
 
   // 6. Wrap as a single assistant message with the sentinel prefix.
   const summaryMessage: ModelMessage = {

@@ -34,7 +34,8 @@ export type AgentEvent =
   | { type: "approval_request"; id: string; action: string; payload: unknown }
   | { type: "usage"; inputTokens: number; outputTokens: number }
   | { type: "error"; error: Error; kind?: RuntimeErrorKind }
-  | { type: "done"; reason: "complete" | "interrupted" | "error" | "max_turns" };
+  | { type: "done"; reason: "complete" | "interrupted" | "error" | "max_turns" }
+  | { type: "system_message"; text: string };
 
 export interface Session {
   readonly id: string;

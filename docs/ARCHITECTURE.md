@@ -372,11 +372,15 @@ Each task can pin its own model / max_tokens / temperature. Premium tokens are r
 4. **Iterative refinement.** On re-compaction, the prior summary at position `middle[0]` (the position left by the previous compaction) is detected via the sentinel prefix and folded into the new summarization prompt. Prevents drift across multiple passes.
 5. **Focused compaction.** `/compact <focus>` lets the user steer the summary toward a particular topic — useful when the conversation pivots and old detail is no longer relevant. The focus text is appended to the auxiliary's prompt as `Focus the summary on: <focus>`.
 
-**B.2 — pending (next slice):**
+**B.2 — shipped:**
 
-6. **Automatic threshold trigger.** When estimated token usage approaches a threshold (default ~85% of the active model's context window), compaction fires before the next chat turn without the user invoking `/compact` manually. Currently the v1 safety net is a char-based "context near limit" warning text event from the chat path.
-7. **Anti-thrashing.** If the last compaction saved less than ~10% of tokens, skip the next compaction trigger — we're churning rather than condensing.
-8. **Failure cooldown.** If an auxiliary call fails, wait until the next user turn before retrying.
+6. **Automatic threshold trigger.** When estimated token usage crosses `AUTO_COMPACT_THRESHOLD` (default 85% of the model's context window) after appending the user message, compaction fires before `streamText` starts. The user sees a `system_message` event ("Compacting older turns…") before the auxiliary call and a result banner ("Auto-compacted: N → M, ~X tokens saved.") after.
+7. **Anti-thrashing.** If the most recent compaction saved less than `ANTI_THRASHING_MIN_SAVED_RATIO` (default 10%) of tokens, the next auto-trigger is skipped. Prevents churn when there's no productive compaction available. Manual `/compact` is exempt from anti-thrashing.
+8. **Failure handling.** On auxiliary failure, the error is caught, a failure `system_message` is emitted, and the chat turn proceeds with the un-compacted messages array. No dedicated cooldown state — the single-check-per-`sendMessage` design naturally prevents in-turn retries, and the next typed message re-evaluates the trigger from scratch.
+
+**AbortController lifecycle.** `DirectApiSession.currentAbort` is created at the top of `sendMessage` (before the auto-trigger check) and reused by both auto-compaction's auxiliary call and the subsequent `streamText`. `interrupt()` cancels both with one `abort()` call. The shared signal is threaded through `compactMessages({ signal })` → `AuxiliaryClient.complete({ signal })` → `generateText({ abortSignal })`.
+
+**Event surface.** Auto-compaction status surfaces via a dedicated `system_message` AgentEvent variant (added in this slice). Routed by `App.tsx` to a `system` chat item — distinct from `text` (assistant-streaming) and `runtime-error`. Manual `/compact` continues to surface its result via the slash-command dispatcher's existing system chat-item path; the two paths converge on the same renderer.
 
 ### Token estimation
 

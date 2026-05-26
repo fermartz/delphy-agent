@@ -185,6 +185,17 @@ function App() {
             setStreaming(false);
             break;
 
+          case "system_message":
+            // Finalize any in-flight streaming assistant message first, so the
+            // system item lands cleanly between turns. A subsequent text event
+            // (e.g., the actual model reply after auto-compaction) will start
+            // a fresh streaming assistant bubble.
+            setItems((prev) => [
+              ...finalizeInFlight(prev, "complete"),
+              { kind: "system", id: nextItemId(), text: event.text },
+            ]);
+            break;
+
           default:
             break;
         }
