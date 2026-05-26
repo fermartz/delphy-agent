@@ -50,10 +50,11 @@ describe("startActiveBackend → directApiAdapter pass-through", () => {
     vi.clearAllMocks();
   });
 
-  it("passes settings.main_model through to directApiAdapter.start as modelId", async () => {
+  it("passes settings.main_model + settings.auxiliary_model through to directApiAdapter.start", async () => {
     mockedLoadSettings.mockResolvedValue({
       ...DEFAULT_SETTINGS,
       main_model: "claude-opus-4-7",
+      auxiliary_model: "claude-haiku-4-5",
     });
     mockedStart.mockResolvedValue({
       id: "direct-api-1",
@@ -64,15 +65,19 @@ describe("startActiveBackend → directApiAdapter pass-through", () => {
       interrupt: vi.fn(),
       close: vi.fn(),
       respondToApproval: vi.fn(),
+      compact: vi.fn(async () => ({ before: 0, after: 0, tokensSaved: 0 })),
     });
 
     const result = await startActiveBackend();
 
-    expect(mockedStart).toHaveBeenCalledWith({ modelId: "claude-opus-4-7" });
+    expect(mockedStart).toHaveBeenCalledWith({
+      modelId: "claude-opus-4-7",
+      auxiliaryModelId: "claude-haiku-4-5",
+    });
     expect(result.backend).toBe("anthropic-api");
   });
 
-  it("uses settings.main_model even when it is the default value", async () => {
+  it("uses settings defaults for both main and auxiliary when not overridden", async () => {
     mockedLoadSettings.mockResolvedValue({ ...DEFAULT_SETTINGS });
     mockedStart.mockResolvedValue({
       id: "direct-api-2",
@@ -83,10 +88,38 @@ describe("startActiveBackend → directApiAdapter pass-through", () => {
       interrupt: vi.fn(),
       close: vi.fn(),
       respondToApproval: vi.fn(),
+      compact: vi.fn(async () => ({ before: 0, after: 0, tokensSaved: 0 })),
     });
 
     await startActiveBackend();
 
-    expect(mockedStart).toHaveBeenCalledWith({ modelId: DEFAULT_SETTINGS.main_model });
+    expect(mockedStart).toHaveBeenCalledWith({
+      modelId: DEFAULT_SETTINGS.main_model,
+      auxiliaryModelId: DEFAULT_SETTINGS.auxiliary_model,
+    });
+  });
+
+  it("threads a custom auxiliary_model through to directApiAdapter.start (pins R1-1 contract)", async () => {
+    mockedLoadSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      auxiliary_model: "gemini-2.5-flash",
+    });
+    mockedStart.mockResolvedValue({
+      id: "direct-api-3",
+      sendMessage: vi.fn(),
+      events: {
+        [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }),
+      },
+      interrupt: vi.fn(),
+      close: vi.fn(),
+      respondToApproval: vi.fn(),
+      compact: vi.fn(async () => ({ before: 0, after: 0, tokensSaved: 0 })),
+    });
+
+    await startActiveBackend();
+
+    expect(mockedStart).toHaveBeenCalledWith(
+      expect.objectContaining({ auxiliaryModelId: "gemini-2.5-flash" }),
+    );
   });
 });

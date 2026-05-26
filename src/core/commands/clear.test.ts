@@ -11,6 +11,7 @@ function makeCtx(): CommandContext {
     openSettings: vi.fn(),
     saveSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
     fetchModels: vi.fn(async () => []),
+    compactSession: vi.fn(async () => ({ before: 0, after: 0, tokensSaved: 0 })),
   };
 }
 

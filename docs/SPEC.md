@@ -211,12 +211,16 @@ Output is rendered as `system` chat items, visually distinct from user / assista
 | `/help` | — | List every registered command with its description. |
 | `/clear` | — | Wipe the chat history and start a fresh session. Emits "Chat cleared." in the now-empty chat. |
 | `/model` | `[<model-id>]` | With no arg, opens the model picker. With a `<model-id>`, validates against the provider's available models (via `fetchModels()`), saves `main_model` to settings, and restarts the session so the new model takes effect on the next message. |
+| `/compact` | `[<focus>]` | Compress the middle of the current conversation into a single summary message, freeing token budget. With no arg, summarizes generically; with `<focus>`, biases the summary toward the focus topic. Output: `Compacted: <N> → <M> messages, ~<X> tokens saved.` Head messages and the most recent tail (under a token budget) are preserved verbatim. Manual compaction in B.1; automatic threshold-triggered compaction lands in B.2. |
 
 ### Error shapes
 
 - Unknown command: `Unknown command: /<name>. Type /help for available commands.`
 - `/model <unknown-id>`: `Model not found: <id>. Type /model (no args) to open the picker and see available models.`
 - `/model <id>` when `fetchModels()` fails (network etc.): `Could not verify model id (<reason>). Saved optimistically; the next message will surface a runtime error if the id is wrong.` The value IS saved + the session restarts; the next chat turn will validate it against the live API.
+- `/compact` on a backend that doesn't support compaction (e.g., the echo fallback): `Compact is not supported by the echo adapter.`
+- `/compact` when the conversation is too short to compact (below the head + middle + tail threshold): `Nothing to compact — conversation is too short.`
+- `/compact` when the auxiliary model call fails (network, invalid key, etc.): the underlying error message is surfaced as a system chat item. The session's messages array is left unchanged; subsequent chat continues to work.
 
 ---
 

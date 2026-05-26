@@ -8,7 +8,16 @@ export interface SessionOptions {
   systemPrompt?: string;
   signal?: AbortSignal;
   modelId?: string;
+  auxiliaryModelId?: string;
 }
+
+export interface CompactionMetrics {
+  before: number;
+  after: number;
+  tokensSaved: number;
+}
+
+export type CompactResult = CompactionMetrics | { error: string };
 
 export type RuntimeErrorKind =
   | "invalid-key"
@@ -34,6 +43,7 @@ export interface Session {
   interrupt(): Promise<void>;
   close(): Promise<void>;
   respondToApproval(id: string, allowed: boolean): Promise<void>;
+  compact(focus?: string): Promise<CompactResult>;
 }
 
 export interface BackendAdapter {

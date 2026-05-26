@@ -11,6 +11,9 @@ export interface CommandContext {
   openSettings: () => void;
   saveSettings: (partial: Partial<Settings>) => Promise<Settings>;
   fetchModels: () => Promise<string[]>;
+  compactSession: (
+    focus?: string,
+  ) => Promise<{ before: number; after: number; tokensSaved: number } | { error: string }>;
 }
 
 export interface CommandResultItem {

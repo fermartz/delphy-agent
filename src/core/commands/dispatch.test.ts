@@ -13,6 +13,7 @@ function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     openSettings: vi.fn(),
     saveSettings: vi.fn(async (partial) => ({ ...DEFAULT_SETTINGS, ...partial })),
     fetchModels: vi.fn(async () => ["claude-sonnet-4-6", "claude-haiku-4-5"]),
+    compactSession: vi.fn(async () => ({ before: 20, after: 8, tokensSaved: 5000 })),
     ...overrides,
   };
 }
@@ -54,6 +55,16 @@ describe("dispatchInput", () => {
     expect(ctx.restartSession).not.toHaveBeenCalled();
     expect(ctx.openSettings).not.toHaveBeenCalled();
     expect(ctx.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("'/compact some focus' reaches the registered handler via the dispatch seam (R1-3)", async () => {
+    const ctx = makeCtx();
+    const result = await dispatchInput("/compact some focus", ctx);
+    expect(ctx.compactSession).toHaveBeenCalledWith("some focus");
+    expect(result.kind).toBe("command-result");
+    if (result.kind === "command-result") {
+      expect(result.items[0].text).toMatch(/Compacted: 20 → 8/);
+    }
   });
 
   it("'/foo' (unknown command) returns command-result with the friendly error", async () => {

@@ -70,6 +70,10 @@ class EchoSession implements Session {
     // Echo never emits approval_request events; nothing to do.
   }
 
+  async compact(_focus?: string): Promise<{ error: string }> {
+    return { error: "Compact is not supported by the echo adapter." };
+  }
+
   events: AsyncIterable<AgentEvent> = {
     [Symbol.asyncIterator]: () => this.iterate(),
   };

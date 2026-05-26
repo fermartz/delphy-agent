@@ -8,6 +8,40 @@ When a decision is later reversed, do not delete the entry — add a new dated e
 
 ---
 
+## 2026-05-26 — Compactor slice split: B → B.1 + B.2; compaction mutates `messages` array (not three-tier `context` slot)
+
+**Decision.** This decision has two coupled parts.
+
+*Part 1 — slice split.* The 2026-05-26 "v1 direct-API ships in two slices" decision committed to ONE slice for the compactor (Slice B). This decision splits that slice into **B.1** (manual `/compact` + AuxiliaryClient + compactor algorithm; ships now) and **B.2** (automatic threshold-based triggering + anti-thrashing + cooldown; future slice). The architectural choices established in prior decisions — head/middle/tail compaction (2026-05-25); AuxiliaryClient with Claude Haiku 4.5 default (2026-05-25 "Auxiliary model tier in v1"); ProviderProfile pattern (2026-05-25) — are unchanged and re-applied here.
+
+*Part 2 — compaction lives in messages array, not three-tier `context` slot.* The prior two-slice decision said "the direct-API adapter compacts the `context` slot when usage crosses the threshold." That framing was imprecise. The three-tier system prompt (including its `context` slot) must not mutate mid-session per the 2026-05-25 cache-discipline decision — any change to the system block invalidates Anthropic prompt caching, which is the biggest token-cost lever in long sessions. Compaction in B.1 lives entirely in the `messages: ModelMessage[]` array within `DirectApiSession`: head + summary + tail. The three-tier prompt's `context` slot stays empty in v1; it's reserved for cross-session content (a summary of the prior session, loaded at session-resume time — BACKLOG #4 SQLite persistence).
+
+**Why split.** The original single-slice scope was ~600 LOC of compactor + AuxiliaryClient + adapter integration + threshold-trigger wiring + tests + docs in one PR. Splitting yields two tractable slices, each independently reviewable. B.1 alone delivers user-visible value (manual `/compact` via the slash-command dispatcher from the prior slice) without waiting on the threshold-detection logic. Net cost: one extra commit boundary; net benefit: each half is reviewable and the algorithm half ships first.
+
+**Why messages-array, not context slot.** Cache discipline. The system prompt must not mutate; the messages array is allowed to mutate freely (only the system block contributes to the cache key beyond the user/assistant turns). Compaction in the messages array preserves the cache on the system block; the rest of the cache is naturally invalidated when messages change (which happens every turn anyway). The "context slot" framing in the prior decision conflated cross-session content (load-time, immutable) with in-session compaction (turn-time, mutable). This decision separates them.
+
+**Alternatives considered.**
+- **Single-slice compactor (per original decision).** Larger scope, longer review cycle, less incremental value. Rejected on tractability.
+- **Compact the context slot anyway, ignore cache discipline.** Would invalidate prompt caching on every compaction — the single biggest token-cost lever evaporates. Rejected.
+- **Defer compactor entirely until SQLite persistence ships (so context-slot population has a real home).** Locks the long-session UX gap open indefinitely. Rejected.
+- **Use the messages array for auto-compaction but pretend that's still "context slot."** Sloppy. Rejected — the decision should be precise about where mutation happens.
+
+**What B.1 ships (concretely).**
+- `src/core/llm/auxiliary.ts` — `AuxiliaryClient` (non-streaming, Anthropic via Vercel AI SDK `generateText`, defaults to `claude-haiku-4-5`).
+- `src/core/session/compactor.ts` — pure `compactMessages` function. Head + token-budget tail walk-backward + middle summarization + iterative-recompaction via sentinel detection.
+- `Session.compact(focus?)` interface extension. Echo: no-op error. DirectApiSession: instantiates aux + runs compactor + mutates `this.messages`.
+- `/compact [<focus>]` slash command, registered alongside `/help`, `/clear`, `/model` in the existing dispatcher.
+- `SessionOptions.auxiliaryModelId` extension, threaded via `boot.ts` from `settings.auxiliary_model`. New test pins the pass-through contract.
+- 17 new tests (3 auxiliary + 7 compactor + 4 compact-handler + 1 dispatch-`/compact` + 1 boot auxiliary pass-through + 1 boot adjusted to assert both modelId + auxiliaryModelId).
+
+**B.2 still to ship.** Automatic threshold-based compaction (fires when usage crosses ~85% of context window before the next turn) + anti-thrashing rule (skip if recent compaction yielded <10% savings) + failure cooldown (wait until next user turn after a failed auxiliary call).
+
+**Lives in.** `src/core/llm/auxiliary.ts` + `auxiliary.test.ts`; `src/core/session/compactor.ts` + `compactor.test.ts`; `src/core/types.ts` (Session.compact signature, SessionOptions.auxiliaryModelId, CompactResult type); `src/core/adapters/{echo,direct-api}.ts` (no-op + real impl); `src/core/boot.ts` + `boot.test.ts`; `src/core/commands/compact.ts` + tests; `src/core/commands/index.ts` (registry); `src/core/commands/types.ts` (CommandContext.compactSession); `src/App.tsx` (ctx wiring); `docs/SPEC.md` § "Built-in slash commands" (`/compact` row + error shapes); `docs/ARCHITECTURE.md` § "Head / middle / tail compaction" (refined prose); this entry.
+
+**Supersedes.** The slicing portion of the 2026-05-26 "v1 direct-API ships in two slices" decision (now three slices: A + B.1 + B.2). The "context slot" implementation-detail wording in that same decision is also refined here — replaced with "the messages array within the active session." All other architectural choices in that decision and its predecessors stand.
+
+---
+
 ## 2026-05-26 — Slash-command dispatcher in the chat input
 
 **Decision.** Chat input lines starting with `/<name>` (where `<name>` is one-or-more `[a-zA-Z0-9_-]` characters) are parsed as **built-in commands** and dispatched to local handlers instead of being sent to the LLM. Three commands ship with this slice: `/help` lists registered commands; `/clear` wipes chat history and restarts the session; `/model [<id>]` with no arg opens the settings model picker, with an `<id>` validates against `fetchModels()` then saves + restarts the session. Output renders as `system` chat items (neutral gray italic). Everything that doesn't match the strict `/<alnum>` shape (e.g., `//`, `/ `, `///`, mid-line `/`) falls through to the existing send-to-LLM path. External v1 contract for the three commands + error shapes lives in `docs/SPEC.md` § "Built-in slash commands."

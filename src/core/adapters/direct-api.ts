@@ -1,11 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { type ModelMessage, streamText } from "ai";
+import { AuxiliaryClient } from "../llm/auxiliary";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
 import { getProvider } from "../providers";
 import { getRuntimeKey } from "../providers/anthropic-runtime-key";
+import { compactMessages, DEFAULT_COMPACTOR_CONFIG } from "../session/compactor";
 import type {
   AgentEvent,
   BackendAdapter,
+  CompactResult,
   RuntimeErrorKind,
   SendOptions,
   Session,
@@ -123,18 +126,20 @@ class DirectApiSession implements Session {
   private resolveNextEvent: (() => void) | null = null;
   private eventsClosed = false;
 
-  private readonly messages: ModelMessage[] = [];
+  private messages: ModelMessage[] = [];
   private readonly systemPrompt: string;
 
   private readonly apiKey: string;
   private readonly modelId: string;
+  private readonly auxiliaryModelId: string;
 
   private currentAbort: AbortController | null = null;
 
-  constructor(id: string, apiKey: string, modelId: string) {
+  constructor(id: string, apiKey: string, modelId: string, auxiliaryModelId: string) {
     this.id = id;
     this.apiKey = apiKey;
     this.modelId = modelId;
+    this.auxiliaryModelId = auxiliaryModelId;
     this.systemPrompt = buildSystemPrompt(defaultSystemPromptSlices());
   }
 
@@ -173,7 +178,7 @@ class DirectApiSession implements Session {
         type: "text",
         delta:
           `[delphy:context-warning] Context is near the model limit (${tokensUsed.toLocaleString()} / ${CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens estimated). ` +
-          "Compaction lands in the next slice; for now, start a new session if responses get truncated.\n\n",
+          "Type /compact to summarize older turns and free token budget. Automatic compaction lands in a future slice.\n\n",
       });
     }
 
@@ -269,6 +274,36 @@ class DirectApiSession implements Session {
   async respondToApproval(_id: string, _allowed: boolean): Promise<void> {
     // No tool surface in v1 — MCP lands in BACKLOG #6. Method exists to satisfy Session contract.
   }
+
+  async compact(focus?: string): Promise<CompactResult> {
+    try {
+      const aux = new AuxiliaryClient({
+        apiKey: this.apiKey,
+        modelId: this.auxiliaryModelId,
+      });
+      const result = await compactMessages({
+        messages: this.messages,
+        config: DEFAULT_COMPACTOR_CONFIG,
+        aux,
+        focus,
+      });
+      if (result.unchanged) {
+        return {
+          before: result.metrics.before,
+          after: result.metrics.after,
+          tokensSaved: result.metrics.estimatedTokensSaved,
+        };
+      }
+      this.messages = result.compactedMessages;
+      return {
+        before: result.metrics.before,
+        after: result.metrics.after,
+        tokensSaved: result.metrics.estimatedTokensSaved,
+      };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
 }
 
 let sessionCounter = 0;
@@ -292,6 +327,7 @@ export const directApiAdapter: BackendAdapter = {
       `direct-api-${sessionCounter}`,
       resolved.key,
       opts.modelId ?? profile.defaultModel,
+      opts.auxiliaryModelId ?? "claude-haiku-4-5",
     );
   },
 };

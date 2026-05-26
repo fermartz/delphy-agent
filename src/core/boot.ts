@@ -16,7 +16,10 @@ export interface BootResult {
 export async function startActiveBackend(): Promise<BootResult> {
   const settings = await loadSettings();
   try {
-    const session = await directApiAdapter.start({ modelId: settings.main_model });
+    const session = await directApiAdapter.start({
+      modelId: settings.main_model,
+      auxiliaryModelId: settings.auxiliary_model,
+    });
     return { session, backend: "anthropic-api", settings };
   } catch (err) {
     const echoSession = await echoAdapter.start({});

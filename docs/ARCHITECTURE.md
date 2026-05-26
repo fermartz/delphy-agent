@@ -362,16 +362,21 @@ Each task can pin its own model / max_tokens / temperature. Premium tokens are r
 
 ### Head / middle / tail compaction
 
-When estimated token usage approaches the compaction threshold (default 75% of the active model's context window):
+**Where compaction lives.** Within a session, compaction mutates the `messages: ModelMessage[]` array on `DirectApiSession`, not the three-tier system prompt's `context` slot. The system prompt is immutable mid-session per the prompt-cache discipline rule above; the messages array is allowed to change every turn. The three-tier `context` slot is reserved for cross-session content (e.g., a summary of the prior session, loaded at session-resume time from SQLite once persistence ships).
 
-1. **Head protected.** System prompt + first `N` messages (default `N=2`) are never compacted.
-2. **Tail kept by token budget**, not message count (default `tail_token_budget=8000`). Walk from the newest message backwards, accumulating tokens until the budget is hit.
-3. **Middle compressed** by sending the middle slice to the auxiliary client with a fixed `[CONTEXT COMPACTION — REFERENCE ONLY]` preamble that instructs the model to treat the summary as background, not new instructions. Output structure: `Resolved / Pending / Active Task / Remaining Work`.
-4. **Iterative refinement.** Each compaction passes the previous summary in, asking the auxiliary model to update it rather than write a new one. Avoids drift across multiple compactions.
-5. **Anti-thrashing.** If the last two compactions each saved less than 10% of tokens, skip — we're churning rather than condensing.
-6. **Failure cooldown.** If a compaction LLM call fails, wait 10 minutes before retrying. Fall back to dropping the oldest tool results.
+**B.1 — shipped manually via `/compact`:**
 
-A focused compaction (`/compact <focus>`) lets the user steer the summary toward a particular topic — useful when the conversation pivots and old detail is no longer relevant.
+1. **Head protected.** First `headSize` messages (default `4`) are never compacted.
+2. **Tail kept by token budget**, not message count (default `tailTokenBudget=8000`). Walk from the newest message backwards, accumulating per-message token estimates (`chars/3.5`, same estimator as the chat path) until the budget is hit. The boundary becomes the start of tail.
+3. **Middle compressed** by sending `[<prior summary if any>, ...new middle messages]` plus an optional focus line to the auxiliary client. The auxiliary's response is wrapped as a single `assistant`-role message with the sentinel prefix `[Earlier conversation summary, generated for token economy]`. The resulting array shape is `[...head, summaryMessage, ...tail]`.
+4. **Iterative refinement.** On re-compaction, the prior summary at position `middle[0]` (the position left by the previous compaction) is detected via the sentinel prefix and folded into the new summarization prompt. Prevents drift across multiple passes.
+5. **Focused compaction.** `/compact <focus>` lets the user steer the summary toward a particular topic — useful when the conversation pivots and old detail is no longer relevant. The focus text is appended to the auxiliary's prompt as `Focus the summary on: <focus>`.
+
+**B.2 — pending (next slice):**
+
+6. **Automatic threshold trigger.** When estimated token usage approaches a threshold (default ~85% of the active model's context window), compaction fires before the next chat turn without the user invoking `/compact` manually. Currently the v1 safety net is a char-based "context near limit" warning text event from the chat path.
+7. **Anti-thrashing.** If the last compaction saved less than ~10% of tokens, skip the next compaction trigger — we're churning rather than condensing.
+8. **Failure cooldown.** If an auxiliary call fails, wait until the next user turn before retrying.
 
 ### Token estimation
 

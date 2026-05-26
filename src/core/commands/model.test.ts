@@ -11,6 +11,7 @@ function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     openSettings: vi.fn(),
     saveSettings: vi.fn(async (partial) => ({ ...DEFAULT_SETTINGS, ...partial })),
     fetchModels: vi.fn(async () => ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-7"]),
+    compactSession: vi.fn(async () => ({ before: 0, after: 0, tokensSaved: 0 })),
     ...overrides,
   };
 }

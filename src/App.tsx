@@ -223,6 +223,11 @@ function App() {
         }
         return anthropicProfile.fetchModels(apiKey);
       },
+      compactSession: async (focus) => {
+        const session = sessionRef.current;
+        if (!session) return { error: "No active session." };
+        return session.compact(focus);
+      },
     };
 
     const result = await dispatchInput(trimmed, ctx);

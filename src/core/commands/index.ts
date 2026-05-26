@@ -1,4 +1,5 @@
 import clearCommand from "./clear";
+import compactCommand from "./compact";
 import helpCommand from "./help";
 import modelCommand from "./model";
 import { registerCommand } from "./registry";
@@ -19,3 +20,4 @@ export type {
 registerCommand(helpCommand);
 registerCommand(clearCommand);
 registerCommand(modelCommand);
+registerCommand(compactCommand);
