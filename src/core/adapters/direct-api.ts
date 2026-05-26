@@ -351,6 +351,7 @@ class DirectApiSession implements Session {
       this.emitEvent({
         type: "system_message",
         text: `Auto-compaction failed (${reason}); continuing with un-compacted history.`,
+        intent: "error",
       });
     } finally {
       this.compactionInFlight = false;

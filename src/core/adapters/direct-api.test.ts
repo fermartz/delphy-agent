@@ -338,6 +338,9 @@ describe("directApiAdapter — auto-compaction trigger (B.2)", () => {
     expect(systemMessages).toHaveLength(2);
     const last = systemMessages[systemMessages.length - 1];
     expect(last.type === "system_message" && last.text).toMatch(/Auto-compaction failed.*aux down/);
+    // The failure banner carries the error intent so it renders with the
+    // theme-tinted AlertTriangle icon (per Astra catalog) instead of Info.
+    expect(last.type === "system_message" && last.intent).toBe("error");
     // Chat still produced a normal text event from the mocked stream.
     expect(events.some((e) => e.type === "text")).toBe(true);
     expect(events.some((e) => e.type === "done" && e.reason === "complete")).toBe(true);

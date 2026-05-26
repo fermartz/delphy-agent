@@ -14,6 +14,7 @@ export async function dispatchInput(text: string, ctx: CommandContext): Promise<
       items: [
         {
           text: `Unknown command: /${parsed.name}. Type /help for available commands.`,
+          intent: "error",
         },
       ],
     };

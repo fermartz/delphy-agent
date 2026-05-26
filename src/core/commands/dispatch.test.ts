@@ -74,6 +74,7 @@ describe("dispatchInput", () => {
     if (result.kind === "command-result") {
       expect(result.items[0].text).toMatch(/Unknown command: \/foo/);
       expect(result.items[0].text).toMatch(/Type \/help/);
+      expect(result.items[0].intent).toBe("error");
     }
     expect(ctx.triggerReboot).not.toHaveBeenCalled();
     expect(ctx.restartSession).not.toHaveBeenCalled();

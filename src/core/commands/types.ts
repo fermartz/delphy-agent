@@ -18,6 +18,7 @@ export interface CommandContext {
 
 export interface CommandResultItem {
   text: string;
+  intent?: "info" | "error";
 }
 
 export interface CommandResult {

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Loader2, Send, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { BrandLogo } from "@/components/brand-logo";
+import { ChatIcon } from "@/components/chat-icon";
 import { ColorModeToggle } from "@/components/color-mode-toggle";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
@@ -46,7 +47,7 @@ type ChatItem =
   | { kind: "tool-call"; id: string; name: string; input: unknown }
   | { kind: "tool-result"; id: string; output: unknown; isError?: boolean }
   | { kind: "runtime-error"; id: string; errorKind: RuntimeErrorKind; message: string }
-  | { kind: "system"; id: string; text: string };
+  | { kind: "system"; id: string; text: string; intent?: "info" | "error" };
 
 let itemCounter = 0;
 function nextItemId(): string {
@@ -211,7 +212,7 @@ function App() {
             // a fresh streaming assistant bubble.
             setItems((prev) => [
               ...finalizeInFlight(prev, "complete"),
-              { kind: "system", id: nextItemId(), text: event.text },
+              { kind: "system", id: nextItemId(), text: event.text, intent: event.intent },
             ]);
             break;
 
@@ -317,6 +318,7 @@ function App() {
           kind: "system" as const,
           id: nextItemId(),
           text: it.text,
+          intent: it.intent,
         })),
       ]);
       return;
@@ -494,10 +496,8 @@ function App() {
         ) : (
           <ul className="space-y-3">
             {items.map((it) => (
-              <li key={it.id} className="flex gap-3">
-                <span className="w-20 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
-                  {labelFor(it)}
-                </span>
+              <li key={it.id} className="flex gap-2">
+                <ChatIcon item={it} />
                 <div className="flex-1">{renderItem(it, handleApproval, handleChangeKey)}</div>
               </li>
             ))}
@@ -650,25 +650,6 @@ function BootBanner({
       </form>
     </div>
   );
-}
-
-function labelFor(it: ChatItem): string {
-  switch (it.kind) {
-    case "user-text":
-      return "user";
-    case "assistant-text":
-      return "assistant";
-    case "approval":
-      return "approval";
-    case "tool-call":
-      return "tool";
-    case "tool-result":
-      return "result";
-    case "runtime-error":
-      return "error";
-    case "system":
-      return "system";
-  }
 }
 
 function renderItem(
