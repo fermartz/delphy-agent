@@ -44,7 +44,7 @@ Delphy Agent runs as three kinds of processes:
 | Frontend framework | **React 18 + TypeScript** | |
 | Build tool | **Vite** | Fast dev server, ESM, matches Tauri's expectations |
 | Styling | **Tailwind v4** | Same as Astra Tauri build |
-| Component library | **shadcn/ui** | Same as Astra Tauri build |
+| Component library | **shadcn/ui** | Same as Astra Tauri build. Installed 2026-05-27 (chrome port): `button`, `dialog`, `select`, `radio-group`, `dropdown-menu`. Paired with **`lucide-react`** for icons (added via shadcn's Nova preset). |
 | State | **Zustand** | Lightweight, fits chat/session shape; avoid Redux unless we need its devtools/middleware |
 | Direct-API LLM access | **Vercel AI SDK v5 (`ai` + `@ai-sdk/anthropic` + `@ai-sdk/openai` + `@ai-sdk/google`)** | Unified streaming, tool calls, Responses API support |
 | Claude Code | **`@anthropic-ai/claude-agent-sdk`** | TS, async-generator API, runtime model/MCP swap, `canUseTool` permission callback |

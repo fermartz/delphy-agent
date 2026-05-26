@@ -1,4 +1,9 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
 
 /*
  * Theme tokens — see src/themes/ and docs/THEMES.md.
@@ -13,6 +18,10 @@
  *     (before themes load) has reasonable defaults instead of unset/transparent
  *     boxes. The fallback is overridden as soon as a [data-theme="<id>"]
  *     rule matches (more-specific selector wins).
+ *   - We deliberately do NOT keep shadcn's default `.dark { ... }` block —
+ *     per-theme dark variants come from injectThemeStyles via
+ *     `[data-theme="<id>"].dark { ... }`. A plain `.dark` block would force
+ *     shadcn's neutral grays when any theme is active, defeating the system.
  */
 
 :root {
@@ -89,4 +98,24 @@
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
   --radius: var(--radius);
+  --font-heading: var(--font-sans);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }

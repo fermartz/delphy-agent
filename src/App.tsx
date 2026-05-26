@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import { Loader2, Send, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { BrandLogo } from "@/components/brand-logo";
+import { ColorModeToggle } from "@/components/color-mode-toggle";
+import { SettingsModal } from "@/components/settings-modal";
+import { StatusBar } from "@/components/status-bar";
+import { ThemeSwitcher } from "@/components/theme-switcher";
+import { Button } from "@/components/ui/button";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { type CommandContext, dispatchInput } from "./core/commands";
@@ -435,37 +442,34 @@ function App() {
         ? "echo (fallback)"
         : "…";
   const inputDisabled = streaming || !ready || (backend === "echo-fallback" && bootError !== null);
+  const activityLabel = !ready ? "Connecting…" : streaming ? "Streaming…" : "Ready";
+  const COMMAND_HINTS = ["/help", "/clear", "/model", "/compact"];
 
   return (
     <main className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex items-center justify-between border-b border-border px-4 py-3 text-sm font-medium">
-        <span>
-          Delphy Agent
-          <span className="ml-2 text-muted-foreground">— {backendLabel}</span>
-        </span>
-        <button
-          type="button"
-          onClick={openSettings}
-          aria-label="Open settings"
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+      <header className="flex items-center justify-between border-b border-border px-4 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <BrandLogo size={40} />
+          <h1 className="shrink-0 text-lg font-semibold tracking-tight">Delphy Agent</h1>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <ThemeSwitcher
+            themes={themes}
+            selectedThemeId={settings.selected_theme}
+            onThemeChange={handleThemeChange}
+          />
+          <ColorModeToggle mode={settings.color_mode} onChange={handleColorModeChange} />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={openSettings}
+            aria-label="Open settings"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
           >
-            <title>Settings</title>
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </button>
+            <SettingsIcon className="h-3 w-3" />
+          </Button>
+        </div>
       </header>
 
       {backend === "echo-fallback" && bootError ? (
@@ -501,33 +505,52 @@ function App() {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t border-border px-4 py-3">
+      <StatusBar
+        brand="delphy-agent"
+        model={settings.main_model}
+        activity={activityLabel}
+        commandHints={COMMAND_HINTS}
+      />
+
+      <form
+        onSubmit={handleSubmit}
+        className="flex items-end gap-2 border-t border-border px-4 py-3"
+      >
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.currentTarget.value)}
           placeholder={`Message ${backendLabel}...`}
           disabled={inputDisabled}
-          className="w-full rounded border border-input bg-background text-foreground px-3 py-2 text-sm focus:border-ring focus:outline-none disabled:opacity-50"
+          className="flex-1 rounded-lg border-none bg-muted px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
         />
+        <Button
+          type="submit"
+          variant="ghost"
+          size="icon"
+          disabled={inputDisabled || input.trim().length === 0}
+          aria-label="Send message"
+          className="mb-0.5 shrink-0"
+        >
+          {streaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+        </Button>
       </form>
 
-      {settingsOpen ? (
-        <SettingsModal
-          currentModel={settings.main_model}
-          availableModels={availableModels}
-          modelsLoading={modelsLoading}
-          modelsError={modelsError}
-          themes={themes}
-          selectedThemeId={settings.selected_theme}
-          colorMode={settings.color_mode}
-          onSelect={handleModelChange}
-          onThemeChange={handleThemeChange}
-          onColorModeChange={handleColorModeChange}
-          onClose={closeSettings}
-          onRetry={openSettings}
-        />
-      ) : null}
+      <SettingsModal
+        open={settingsOpen}
+        onOpenChange={(open) => (open ? openSettings() : closeSettings())}
+        currentModel={settings.main_model}
+        availableModels={availableModels}
+        modelsLoading={modelsLoading}
+        modelsError={modelsError}
+        themes={themes}
+        selectedThemeId={settings.selected_theme}
+        colorMode={settings.color_mode}
+        onSelectModel={handleModelChange}
+        onThemeChange={handleThemeChange}
+        onColorModeChange={handleColorModeChange}
+        onRetry={openSettings}
+      />
 
       {toast ? (
         <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 rounded bg-foreground px-4 py-2 text-xs text-background shadow-lg">
@@ -535,151 +558,6 @@ function App() {
         </div>
       ) : null}
     </main>
-  );
-}
-
-function SettingsModal({
-  currentModel,
-  availableModels,
-  modelsLoading,
-  modelsError,
-  themes,
-  selectedThemeId,
-  colorMode,
-  onSelect,
-  onThemeChange,
-  onColorModeChange,
-  onClose,
-  onRetry,
-}: {
-  currentModel: string;
-  availableModels: string[] | null;
-  modelsLoading: boolean;
-  modelsError: string | null;
-  themes: Theme[];
-  selectedThemeId: string;
-  colorMode: ColorMode;
-  onSelect: (model: string) => void;
-  onThemeChange: (themeId: string) => void;
-  onColorModeChange: (mode: ColorMode) => void;
-  onClose: () => void;
-  onRetry: () => void;
-}) {
-  return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: overlay backdrop click-outside-to-close + Escape — standard modal pattern; dialog content has its own role + close button
-    <div
-      role="presentation"
-      onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
-      className="fixed inset-0 z-10 flex items-center justify-center bg-black/30"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-xl"
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Settings</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close settings"
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="mt-4">
-          <div className="text-xs font-medium text-foreground">Model</div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            Current: <span className="font-mono text-foreground">{currentModel}</span>
-          </div>
-
-          {modelsLoading ? (
-            <div className="mt-3 text-xs text-muted-foreground">Loading models…</div>
-          ) : modelsError ? (
-            <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
-              <div>{modelsError}</div>
-              <button
-                type="button"
-                onClick={onRetry}
-                className="mt-2 rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700"
-              >
-                Retry
-              </button>
-            </div>
-          ) : availableModels ? (
-            <>
-              <select
-                value={currentModel}
-                onChange={(e) => onSelect(e.currentTarget.value)}
-                className="mt-3 w-full rounded border border-input bg-background text-foreground px-2 py-1 text-sm focus:border-ring focus:outline-none"
-              >
-                {/* If the current model isn't in the fetched list (e.g., older saved choice), still show it as an option. */}
-                {availableModels.includes(currentModel) ? null : (
-                  <option value={currentModel}>{currentModel} (saved)</option>
-                )}
-                {availableModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Changes apply when you start a new chat — your current conversation keeps its model.
-              </p>
-            </>
-          ) : null}
-        </div>
-
-        <div className="mt-5">
-          <label htmlFor="theme-select" className="text-xs font-medium text-foreground">
-            Theme
-          </label>
-          <select
-            id="theme-select"
-            value={selectedThemeId}
-            onChange={(e) => onThemeChange(e.currentTarget.value)}
-            disabled={themes.length === 0}
-            className="mt-2 w-full rounded border border-input bg-background text-foreground px-2 py-1 text-sm focus:border-ring focus:outline-none disabled:opacity-50"
-          >
-            {/* If the saved theme isn't in the registry (e.g., deleted user theme), still show it so the user sees what's set. */}
-            {themes.some((t) => t.id === selectedThemeId) ? null : (
-              <option value={selectedThemeId}>{selectedThemeId} (unavailable)</option>
-            )}
-            {themes.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="mt-4">
-          <div className="text-xs font-medium text-foreground">Color mode</div>
-          <div className="mt-2 flex gap-4 text-xs text-foreground">
-            {(["light", "dark", "system"] as const).map((mode) => (
-              <label key={mode} className="flex items-center gap-1.5">
-                <input
-                  type="radio"
-                  name="color-mode"
-                  value={mode}
-                  checked={colorMode === mode}
-                  onChange={() => onColorModeChange(mode)}
-                />
-                <span className="capitalize">{mode}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -705,13 +583,9 @@ function BootBanner({
       <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
         <div className="font-medium">Backend failed to start.</div>
         <div className="mt-1 text-xs text-red-800">{errorMessage}</div>
-        <button
-          type="button"
-          onClick={onRetry}
-          className="mt-2 rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-700"
-        >
+        <Button type="button" variant="destructive" size="sm" onClick={onRetry} className="mt-2">
           Try again
-        </button>
+        </Button>
       </div>
     );
   }
@@ -765,13 +639,14 @@ function BootBanner({
           disabled={saving}
           className="flex-1 rounded border border-amber-300 bg-white px-3 py-1 text-xs text-neutral-900 focus:border-amber-500 focus:outline-none disabled:opacity-50"
         />
-        <button
+        <Button
           type="submit"
+          size="sm"
           disabled={saving || keyInput.trim().length === 0}
-          className="rounded bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
+          className="bg-amber-600 text-white hover:bg-amber-700"
         >
           {saving ? "Saving..." : isLinuxFallback ? "Use for session" : "Save"}
-        </button>
+        </Button>
       </form>
     </div>
   );
@@ -824,20 +699,23 @@ function renderItem(
           </pre>
           {!it.verdict ? (
             <div className="mt-2 flex gap-2">
-              <button
+              <Button
                 type="button"
+                size="sm"
                 onClick={() => onApproval(it.id, true)}
-                className="rounded bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-700"
+                className="bg-amber-600 text-white hover:bg-amber-700"
               >
                 Approve
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => onApproval(it.id, false)}
-                className="rounded border border-amber-400 px-3 py-1 text-xs text-amber-900 hover:bg-amber-100"
+                className="border-amber-400 text-amber-900 hover:bg-amber-100"
               >
                 Deny
-              </button>
+              </Button>
             </div>
           ) : null}
         </div>
@@ -864,13 +742,15 @@ function renderItem(
           <div className="font-medium text-red-900">{runtimeErrorTitle(it.errorKind)}</div>
           <div className="mt-1 text-red-800">{it.message}</div>
           {it.errorKind === "invalid-key" ? (
-            <button
+            <Button
               type="button"
+              variant="destructive"
+              size="sm"
               onClick={onChangeKey}
-              className="mt-2 rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-700"
+              className="mt-2"
             >
               Change API key
-            </button>
+            </Button>
           ) : null}
         </div>
       );

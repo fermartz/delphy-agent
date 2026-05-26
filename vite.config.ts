@@ -1,5 +1,6 @@
 /// <reference types="vitest" />
 
+import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -9,6 +10,12 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
+
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+    },
+  },
 
   clearScreen: false,
   server: {
@@ -28,7 +35,9 @@ export default defineConfig(async () => ({
   },
 
   test: {
+    globals: true,
     environment: "jsdom",
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    setupFiles: ["./src/test-setup.ts"],
   },
 }));
