@@ -18,6 +18,8 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.79",
     "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-store": "^2.4.3",

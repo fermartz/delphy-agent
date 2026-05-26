@@ -659,7 +659,11 @@ function renderItem(
 ): React.ReactNode {
   switch (it.kind) {
     case "user-text":
-      return <span>{it.text}</span>;
+      return (
+        <span className="inline-block rounded-md bg-muted px-3 py-1.5 text-foreground">
+          {it.text}
+        </span>
+      );
     case "assistant-text":
       return (
         <span className={it.status === "error" ? "text-red-600" : ""}>
