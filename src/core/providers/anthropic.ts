@@ -33,6 +33,10 @@ export const anthropicProfile: ProviderProfile = {
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": ANTHROPIC_VERSION,
+        // Required for browser/webview-origin requests — same opt-in as the chat
+        // path's headers(). Without it Anthropic's CORS preflight fails with HTTP 400
+        // and the fetch surfaces as a generic "Load failed".
+        "anthropic-dangerous-direct-browser-access": "true",
       },
     });
     if (!response.ok) {

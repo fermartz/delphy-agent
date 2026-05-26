@@ -2,7 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
-import { clearRuntimeKey, setRuntimeKey } from "./core/providers/anthropic-runtime-key";
+import { anthropicProfile } from "./core/providers/anthropic";
+import {
+  clearRuntimeKey,
+  getRuntimeKey,
+  setRuntimeKey,
+} from "./core/providers/anthropic-runtime-key";
+import { DEFAULT_SETTINGS } from "./core/settings/defaults";
+import { saveSettings } from "./core/settings/settings";
+import type { Settings } from "./core/settings/types";
 import type { RuntimeErrorKind, Session } from "./core/types";
 
 const ANTHROPIC_SECRET_KEY = "anthropic_api_key";
@@ -64,6 +72,12 @@ function App() {
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [rebootCounter, setRebootCounter] = useState(0);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[] | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
 
   function triggerReboot() {
@@ -87,6 +101,7 @@ function App() {
       sessionRef.current = result.session;
       setBackend(result.backend);
       setBootError(result.error ?? null);
+      setSettings(result.settings);
       setReady(true);
 
       for await (const event of result.session.events) {
@@ -220,6 +235,63 @@ function App() {
     triggerReboot();
   }
 
+  async function openSettings() {
+    setSettingsOpen(true);
+    setAvailableModels(null);
+    setModelsError(null);
+    if (backend !== "anthropic-api") {
+      setModelsError("Set your API key first to fetch available models.");
+      return;
+    }
+    if (!anthropicProfile.fetchModels) {
+      setModelsError("Model listing is not available for this provider.");
+      return;
+    }
+    setModelsLoading(true);
+    try {
+      // Resolve the API key the same way direct-api.ts does at boot:
+      // keychain first, runtime-key module fallback for Linux without
+      // a Secret Service daemon. Without this, the Linux session-only-key
+      // path falsely reports "set your API key first" even when the key is set.
+      let apiKey: string | null = null;
+      try {
+        apiKey = await invoke<string | null>("get_secret", { key: ANTHROPIC_SECRET_KEY });
+      } catch {
+        // Keychain unavailable (SECURE_STORAGE_UNAVAILABLE on bare Linux);
+        // fall through to runtime key.
+      }
+      if (!apiKey) {
+        apiKey = getRuntimeKey();
+      }
+      if (!apiKey) {
+        setModelsError("Set your API key first to fetch available models.");
+        return;
+      }
+      const models = await anthropicProfile.fetchModels(apiKey);
+      setAvailableModels(models);
+    } catch (err) {
+      setModelsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModelsLoading(false);
+    }
+  }
+
+  function closeSettings() {
+    setSettingsOpen(false);
+  }
+
+  async function handleModelChange(newModel: string) {
+    if (newModel === settings.main_model) {
+      closeSettings();
+      return;
+    }
+    const updated = await saveSettings({ main_model: newModel });
+    setSettings(updated);
+    closeSettings();
+    setToast("Model updated — applies on next session.");
+    setTimeout(() => setToast(null), 3500);
+  }
+
   const backendLabel =
     backend === "anthropic-api"
       ? "Anthropic (Claude)"
@@ -230,9 +302,34 @@ function App() {
 
   return (
     <main className="flex h-screen flex-col bg-neutral-50 text-neutral-900">
-      <header className="border-b border-neutral-200 px-4 py-3 text-sm font-medium">
-        Delphy Agent
-        <span className="ml-2 text-neutral-500">— {backendLabel}</span>
+      <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 text-sm font-medium">
+        <span>
+          Delphy Agent
+          <span className="ml-2 text-neutral-500">— {backendLabel}</span>
+        </span>
+        <button
+          type="button"
+          onClick={openSettings}
+          aria-label="Open settings"
+          className="rounded p-1 text-neutral-500 hover:bg-neutral-200 hover:text-neutral-900"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <title>Settings</title>
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </header>
 
       {backend === "echo-fallback" && bootError ? (
@@ -278,7 +375,119 @@ function App() {
           className="w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none disabled:opacity-50"
         />
       </form>
+
+      {settingsOpen ? (
+        <SettingsModal
+          currentModel={settings.main_model}
+          availableModels={availableModels}
+          modelsLoading={modelsLoading}
+          modelsError={modelsError}
+          onSelect={handleModelChange}
+          onClose={closeSettings}
+          onRetry={openSettings}
+        />
+      ) : null}
+
+      {toast ? (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 rounded bg-neutral-900 px-4 py-2 text-xs text-white shadow-lg">
+          {toast}
+        </div>
+      ) : null}
     </main>
+  );
+}
+
+function SettingsModal({
+  currentModel,
+  availableModels,
+  modelsLoading,
+  modelsError,
+  onSelect,
+  onClose,
+  onRetry,
+}: {
+  currentModel: string;
+  availableModels: string[] | null;
+  modelsLoading: boolean;
+  modelsError: string | null;
+  onSelect: (model: string) => void;
+  onClose: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: overlay backdrop click-outside-to-close + Escape — standard modal pattern; dialog content has its own role + close button
+    <div
+      role="presentation"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+      className="fixed inset-0 z-10 flex items-center justify-center bg-black/30"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-5 shadow-xl"
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Settings</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close settings"
+            className="rounded p-1 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="mt-4">
+          <div className="text-xs font-medium text-neutral-700">Model</div>
+          <div className="mt-1 text-xs text-neutral-500">
+            Current: <span className="font-mono text-neutral-900">{currentModel}</span>
+          </div>
+
+          {modelsLoading ? (
+            <div className="mt-3 text-xs text-neutral-500">Loading models…</div>
+          ) : modelsError ? (
+            <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+              <div>{modelsError}</div>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-2 rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700"
+              >
+                Retry
+              </button>
+            </div>
+          ) : availableModels ? (
+            <>
+              <select
+                value={currentModel}
+                onChange={(e) => onSelect(e.currentTarget.value)}
+                className="mt-3 w-full rounded border border-neutral-300 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
+              >
+                {/* If the current model isn't in the fetched list (e.g., older saved choice), still show it as an option. */}
+                {availableModels.includes(currentModel) ? null : (
+                  <option value={currentModel}>{currentModel} (saved)</option>
+                )}
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-2 text-xs text-neutral-500">
+                Changes apply when you start a new chat — your current conversation keeps its model.
+              </p>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -278,7 +278,7 @@ export const directApiAdapter: BackendAdapter = {
   kind: "direct-api",
   label: "Anthropic (Claude)",
 
-  async start(_opts: SessionOptions): Promise<Session> {
+  async start(opts: SessionOptions): Promise<Session> {
     const profile = getProvider(PROVIDER_ID);
     if (!profile) {
       throw new BootError("unknown", `Provider "${PROVIDER_ID}" not registered`);
@@ -288,6 +288,10 @@ export const directApiAdapter: BackendAdapter = {
       throw resolved.error;
     }
     sessionCounter += 1;
-    return new DirectApiSession(`direct-api-${sessionCounter}`, resolved.key, profile.defaultModel);
+    return new DirectApiSession(
+      `direct-api-${sessionCounter}`,
+      resolved.key,
+      opts.modelId ?? profile.defaultModel,
+    );
   },
 };

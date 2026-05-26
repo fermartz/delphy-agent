@@ -8,6 +8,44 @@ When a decision is later reversed, do not delete the entry — add a new dated e
 
 ---
 
+## 2026-05-26 — Settings persistence via `tauri-plugin-store`; supersede settings-file path to `app_data_dir()`
+
+**Decision.** This decision has two coupled parts.
+
+*Part 1 — persistence primitive.* Use `tauri-plugin-store` (Tauri-native, JSON-backed, atomic write) for app-level user preferences (`tauri-plugin-store` 2.4.3 Rust + `@tauri-apps/plugin-store` 2.4.3 JS). Settings file format matches the existing `docs/SPEC.md` § "Settings file" schema: snake_case field names, `$schema: "https://delphy.app/schemas/settings/v1.json"`, six documented fields (`selected_theme`, `color_mode`, `default_backend`, `main_model`, `auxiliary_model`, `window_state`) plus the schema URL, **unknown keys preserved on write** for forward compatibility. Load semantics: read JSON → merge known keys over `DEFAULT_SETTINGS` → log + default-fall-back for invalid known-field values (including explicit `null` for fields whose validator rejects it) → pass unknown keys through unchanged on the next save. Save semantics: partial merge over current → write atomically through the plugin (`autoSave: false`; explicit `store.save()` after each `set` for clean save+toast timing).
+
+*Part 2 — path supersession.* Use `app_data_dir()/settings.json` per Tauri's platform-native path convention, **not** the `~/.config/delphy-agent/...` path documented in earlier versions of `docs/SPEC.md`. The spec's path was XDG style applied uniformly; on macOS this was incorrect (native convention is `~/Library/Application Support/...`). With bundle identifier `app.delphy.agent`, the actual paths are: macOS `~/Library/Application Support/app.delphy.agent/settings.json`, Linux `~/.local/share/app.delphy.agent/settings.json`, Windows `%APPDATA%\app.delphy.agent\settings.json`. `docs/SPEC.md` § "Settings file" was updated in this slice to reflect the new path. The example JSON's `default_backend` value was also corrected from a stale `"claude-api"` to the actual registered adapter `id` `"anthropic-api"`. Only the path portion of the spec is superseded; field shape and semantics are unchanged from spec.
+
+**Why.**
+
+*Persistence primitive.*
+- `tauri-plugin-store` gives atomic-write semantics for free (the plugin handles tmp-write + rename internally), without us touching Rust file-system code beyond plugin registration.
+- JSON is human-debuggable — power users can edit the file directly per the spec's stated intent.
+- No bespoke Tauri commands to write, no new capabilities pattern to invent. The plugin's `store:default` permission identifier is the same shape as our `allow-get-secret` etc. permissions from slice A.
+
+*Path.* The plugin's default resolves relative paths to `app_data_dir()`, which is platform-native. Fighting it (to honor the spec's literal XDG-style path) would add code without value: macOS users land in the convention they expect, Linux users still get `~/.local/share/` (close enough to `~/.config/` to feel right), Windows users get `%APPDATA%` (matching the spec). Net win without the macOS-correctness compromise.
+
+**Alternatives considered (persistence primitive).**
+- Custom Tauri commands wrapping raw `fs` writes — extra Rust code for a problem the plugin already solves; loses atomic-write guarantees.
+- SQLite key-value table — over-engineering for ~6 small fields; SQLite lands with BACKLOG #4 for session/message persistence.
+- `localStorage` in the webview — survives reload but not app restart in Tauri; wrong primitive for "user preferences across sessions."
+
+**Alternatives considered (path).**
+- Honor the spec exactly (`~/.config/delphy-agent/...` everywhere) — requires fighting `tauri-plugin-store`'s defaults; gets macOS conventions wrong.
+- Use a different XDG-compliant base only on Linux + native elsewhere — adds platform-branched logic for no real win.
+
+**What this slice ships.**
+- All six spec-documented fields exist in defaults; only `main_model` is wired to a UI control in this slice. UI controls for `selected_theme` + `color_mode` land with BACKLOG #3 (theme system); `auxiliary_model` picker lands with BACKLOG #8 (compactor). `default_backend` picker lands when there are 2+ backends to choose from. `window_state` is defaulted-and-preserved (no UI yet; written by a future window-state slice).
+- A gear-icon button in the chat header opens a Tailwind-only modal with the current model + a dropdown populated by `anthropicProfile.fetchModels()`. Changes save via `saveSettings({ main_model })`, close the modal, and surface a toast: "Model updated — applies on next session." The dropdown sublabel reminds users: "Changes apply when you start a new chat — your current conversation keeps its model." The in-flight `Session` keeps its bound model — Anthropic prompt-cache discipline requires immutable model+messages within a session.
+- `boot.ts` reads settings + passes `main_model` through to `directApiAdapter.start({ modelId })`. `SessionOptions` extended with optional `modelId?: string`.
+- `fetchModels` now correctly includes the `anthropic-dangerous-direct-browser-access: true` header (bug fix discovered during this slice's manual verification; the chat path had it via `streamText`, but the separate `/v1/models` fetch was missing it).
+
+**Lives in.** `src/core/settings/{types.ts, defaults.ts, settings.ts}` + tests; `src-tauri/src/lib.rs` (plugin registration); `src-tauri/capabilities/default.json` (`store:default` permission); `package.json` + `src-tauri/Cargo.toml` (deps); `docs/SPEC.md` § "Settings file" (path + example value update).
+
+**Supersedes.** The path portion of the 2026-05-25 settings-file specification in `docs/SPEC.md`. Field shape, $schema URL, and load/save semantics unchanged. The 2026-05-25 "Auxiliary model tier in v1" decision is honored — the `auxiliary_model` field is present in the file with default `claude-haiku-4-5`; UI control deferral to BACKLOG #8 is consistent with that decision's "exposes two model selections in settings" requirement (file-level exposure now, UI exposure when the auxiliary client itself ships).
+
+---
+
 ## 2026-05-26 — Local-only agent-workflow artifacts (`.hermes/`, `memory/`)
 
 **Decision.** The plan → build → review workflow generates working notes — plans under `.hermes/plans/`, reviews under `.hermes/reviews/`, an always-loaded `memory/MEMORY.md` index, source maps under `memory/<project>-map.md`, and task trackers under `memory/<project>-tasks.md`. These are **not** tracked in this repository. `.gitignore` keeps the entire `.hermes/` and `memory/` directories out of every commit. Only the *outcomes* of the workflow ship: source-of-truth docs in `docs/`, the curated architectural decision log in this file (`docs/DECISIONS.md`), and the code itself. The `.claude/` directory (project-local Claude Code metadata) is also gitignored as defense-in-depth.

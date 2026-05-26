@@ -97,14 +97,18 @@ A user can export any MCP config as a JSON file matching the shape above. Import
 
 App preferences (selected theme, color mode, default backend) live in Tauri Store. Power users may edit the file directly. Format is defined here so that edits are stable.
 
-Location: `~/.config/delphy-agent/settings.json` (macOS / Linux), `%APPDATA%/delphy-agent/settings.json` (Windows).
+Location: platform-native app-data directory via Tauri's `app_data_dir()` resolution. With bundle identifier `app.delphy.agent`:
+
+- **macOS:** `~/Library/Application Support/app.delphy.agent/settings.json`
+- **Linux:** `~/.local/share/app.delphy.agent/settings.json`
+- **Windows:** `%APPDATA%\app.delphy.agent\settings.json`
 
 ```json
 {
   "$schema": "https://delphy.app/schemas/settings/v1.json",
   "selected_theme": "perpetuity",
   "color_mode": "system",
-  "default_backend": "claude-api",
+  "default_backend": "anthropic-api",
   "main_model": "claude-opus-4-7",
   "auxiliary_model": "claude-haiku-4-5",
   "window_state": {

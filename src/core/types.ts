@@ -7,6 +7,7 @@ export interface SendOptions {
 export interface SessionOptions {
   systemPrompt?: string;
   signal?: AbortSignal;
+  modelId?: string;
 }
 
 export type RuntimeErrorKind =
