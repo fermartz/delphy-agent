@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-spawn-mcp-server"
+description = "Allows the webview to spawn an MCP stdio server subprocess."
+commands.allow = ["spawn_mcp_server"]
+
+[[permission]]
+identifier = "allow-send-mcp-stdin"
+description = "Allows the webview to write a JSON-RPC line to a running MCP server's stdin."
+commands.allow = ["send_mcp_stdin"]
+
+[[permission]]
+identifier = "allow-stop-mcp-server"
+description = "Allows the webview to stop a running MCP server (SIGTERM + 2s grace + SIGKILL fallback)."
+commands.allow = ["stop_mcp_server"]

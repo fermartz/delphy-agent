@@ -1,3 +1,4 @@
+mod mcp_bridge;
 mod secrets;
 mod themes;
 
@@ -16,13 +17,24 @@ pub fn run() {
             secrets::set_secret,
             secrets::delete_secret,
             themes::list_user_themes,
+            mcp_bridge::spawn_mcp_server,
+            mcp_bridge::send_mcp_stdin,
+            mcp_bridge::stop_mcp_server,
         ])
         .setup(|app| {
             if let Err(e) = themes::setup_user_themes_watcher(app) {
                 eprintln!("themes: setup_user_themes_watcher failed: {e}");
             }
+            if let Err(e) = mcp_bridge::init(app) {
+                eprintln!("mcp: init failed: {e}");
+            }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                mcp_bridge::cleanup_on_exit_blocking(app_handle);
+            }
+        });
 }

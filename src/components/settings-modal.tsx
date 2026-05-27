@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { McpServerStatus } from "@/core/mcp/types";
 import type { ColorMode } from "@/core/settings/types";
 import type { Theme } from "@/themes/types";
 
@@ -28,6 +29,7 @@ export interface SettingsModalProps {
   themes: Theme[];
   selectedThemeId: string;
   colorMode: ColorMode;
+  mcpStatuses: McpServerStatus[];
   onSelectModel: (model: string) => void;
   onSelectAuxiliaryModel: (model: string) => void;
   onThemeChange: (themeId: string) => void;
@@ -48,6 +50,7 @@ export function SettingsModal({
   themes,
   selectedThemeId,
   colorMode,
+  mcpStatuses,
   onSelectModel,
   onSelectAuxiliaryModel,
   onThemeChange,
@@ -183,6 +186,33 @@ export function SettingsModal({
         </section>
 
         <section className="space-y-2">
+          <div className="text-xs font-medium text-foreground">MCP servers</div>
+          {mcpStatuses.length === 0 ? (
+            <div className="text-xs text-muted-foreground">No MCP servers configured.</div>
+          ) : (
+            <ul className="space-y-1 text-xs">
+              {mcpStatuses.map((s) => (
+                <li key={s.id} className="flex items-center gap-2">
+                  <span className="font-mono text-foreground">{s.id}</span>
+                  <McpStatusBadge status={s} />
+                  {s.kind === "connected" && typeof s.toolCount === "number" ? (
+                    <span className="text-muted-foreground">
+                      ({s.toolCount} {s.toolCount === 1 ? "tool" : "tools"})
+                    </span>
+                  ) : null}
+                  {s.kind === "failed" && s.error ? (
+                    <span className="truncate text-destructive" title={s.error}>
+                      — {s.error}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-muted-foreground">Configure servers in a future release.</p>
+        </section>
+
+        <section className="space-y-2">
           <div className="text-xs font-medium text-foreground">Color mode</div>
           <RadioGroup
             value={colorMode}
@@ -203,4 +233,23 @@ export function SettingsModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+function McpStatusBadge({ status }: { status: McpServerStatus }) {
+  switch (status.kind) {
+    case "connecting":
+      return (
+        <span className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground">connecting…</span>
+      );
+    case "connected":
+      return <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 text-primary">connected</span>;
+    case "failed":
+      return (
+        <span className="rounded-sm bg-destructive/10 px-1.5 py-0.5 text-destructive">failed</span>
+      );
+    case "disabled":
+      return (
+        <span className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground">disabled</span>
+      );
+  }
 }

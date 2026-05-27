@@ -12,6 +12,9 @@ import { Button } from "@/components/ui/button";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { type CommandContext, dispatchInput } from "./core/commands";
+import { BUILTIN_MCP_CONFIGS } from "./core/mcp/configs";
+import { mcpManager } from "./core/mcp/manager";
+import type { McpServerStatus } from "./core/mcp/types";
 import { anthropicProfile } from "./core/providers/anthropic";
 import {
   clearRuntimeKey,
@@ -112,6 +115,7 @@ function App() {
   // selected_theme / color_mode haven't changed (e.g., the user edited the
   // currently-active theme's JSON in place).
   const [themesVersion, setThemesVersion] = useState(0);
+  const [mcpStatuses, setMcpStatuses] = useState<McpServerStatus[]>([]);
   const sessionRef = useRef<Session | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
@@ -231,6 +235,29 @@ function App() {
       sessionRef.current = null;
     };
   }, [rebootCounter]);
+
+  // Boot MCP servers in parallel with the chat session + themes loader.
+  // Per slice-A plan Parameter 15, failure is non-blocking: each per-server
+  // failure is captured as `kind: "failed"` in McpManager state and surfaces
+  // in the Settings modal; chat works regardless. Show "connecting…" rows
+  // immediately so users see progress while npx warms up on first run.
+  useEffect(() => {
+    let active = true;
+    setMcpStatuses(
+      BUILTIN_MCP_CONFIGS.map((c) => ({
+        id: c.id,
+        name: c.name,
+        kind: c.enabled ? ("connecting" as const) : ("disabled" as const),
+      })),
+    );
+    void mcpManager.init().then(() => {
+      if (!active) return;
+      setMcpStatuses(mcpManager.getStatus());
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Load themes on mount, inject the <style> rules, then subscribe to live
   // changes from the user-themes directory. Each watcher event re-loads,
@@ -573,6 +600,7 @@ function App() {
         themes={themes}
         selectedThemeId={settings.selected_theme}
         colorMode={settings.color_mode}
+        mcpStatuses={mcpStatuses}
         onSelectModel={handleModelChange}
         onSelectAuxiliaryModel={handleAuxiliaryModelChange}
         onThemeChange={handleThemeChange}

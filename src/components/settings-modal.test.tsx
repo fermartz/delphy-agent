@@ -55,6 +55,7 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
       themes={fakeThemes}
       selectedThemeId="perpetuity"
       colorMode="dark"
+      mcpStatuses={[]}
       onSelectModel={onSelectModel}
       onSelectAuxiliaryModel={onSelectAuxiliaryModel}
       onThemeChange={onThemeChange}
@@ -125,6 +126,21 @@ describe("SettingsModal", () => {
     await waitFor(() => {
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
+  });
+
+  it("renders the MCP servers section with id, status badge, and tool count for each entry", () => {
+    renderModal({
+      mcpStatuses: [
+        { id: "server-everything", name: "Everything", kind: "connected", toolCount: 13 },
+        { id: "broken-one", name: "Broken", kind: "failed", error: "SPAWN_FAILED: nope" },
+      ],
+    });
+    expect(screen.getByText("server-everything")).toBeInTheDocument();
+    expect(screen.getByText("connected")).toBeInTheDocument();
+    expect(screen.getByText("(13 tools)")).toBeInTheDocument();
+    expect(screen.getByText("broken-one")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText(/SPAWN_FAILED: nope/)).toBeInTheDocument();
   });
 
   it("shows '(unavailable)' for a selected theme that's no longer in the registry", async () => {

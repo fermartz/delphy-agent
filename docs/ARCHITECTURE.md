@@ -224,15 +224,18 @@ interface McpServerConfig {
 
 ### MCP stdio bridge (Rust)
 
-The bridge is the one nontrivial Rust component. It exists because the TS MCP SDK can't spawn child processes directly from a webview.
+The bridge is the one nontrivial Rust component. It exists because the TS MCP SDK can't spawn child processes directly from a webview. Slice A of BACKLOG #6 (shipped 2026-05-27) wired the foundation; slices B + C build on it.
 
-Responsibilities:
-- `spawn_mcp_server(config)` Tauri command — launches the configured command, returns a `server_handle_id`
-- For each running server, emit Tauri events with stdout lines as they arrive
-- Tauri command `send_mcp_stdin(server_handle_id, line)` — writes to the child's stdin
-- Cleanup on app shutdown — SIGTERM all children, then SIGKILL after a grace period
+Responsibilities (shipped):
+- `spawn_mcp_server(config)` Tauri command — launches the configured `tokio::process::Command` child with piped stdin/stdout/stderr, spawns background tasks that read stdout + stderr line-by-line and emit per-handle Tauri events, returns the config's `id` as the handle. Lives in `src-tauri/src/mcp_bridge.rs`.
+- For each running server, per-handle Tauri events `mcp:<handle>:stdout` and `mcp:<handle>:stderr` carry `{ line: String }` payloads. Topic isolation gives ordering for free (one emitter per topic); no sequence numbers needed at MCP message rates — see `docs/DECISIONS.md` 2026-05-27 entry for the streaming-protocol decision.
+- `send_mcp_stdin(handle, line)` Tauri command — writes `line + '\n'` to the child's stdin.
+- `stop_mcp_server(handle)` Tauri command — async; SIGTERM → 2-second `tokio::time::timeout(child.wait())` → SIGKILL-fallback. Used by future slice C's restart-server action.
+- Cleanup on app shutdown — **best-effort synchronous SIGKILL** of each managed child by raw `pid` (Unix: `libc::kill`; Windows: no-op + log, deferred). Tauri's `RunEvent::Exit` hook is synchronous + late in shutdown with no clean place to await per-child teardown — this is an honest limit, not the SIGTERM + grace pattern initially considered. See the same DECISIONS.md entry for the full rationale + acknowledged limits + stale-process recovery being deferred to slice C.
 
-The TS MCP client uses a custom `Transport` implementation that wraps these Tauri commands and events, so the rest of the SDK is unaware.
+The TS MCP client uses a custom `Transport` implementation (`src/core/mcp/tauri-transport.ts`) that wraps these Tauri commands and events to satisfy the SDK's `Transport` interface, so the rest of the SDK is unaware. The `McpManager` singleton in `src/core/mcp/manager.ts` owns the lifetime of configured servers: spawn at app boot, connect a `Client` over `TauriTransport`, call `client.connect(transport)` (which auto-runs the MCP initialize handshake), call `client.listTools()`, and surface the result. Per-server failures are captured and reported in the Settings modal's read-only "MCP servers" section without blocking chat. `init()` is idempotent across concurrent + repeat callers via a shared in-flight promise — important for React Strict Mode.
+
+Slice B will consume `mcpManager.getAllTools()` for `streamText({ tools })` wiring + activate the approval flow. Slice C will add config persistence (currently hardcoded in `src/core/mcp/configs.ts`) + add/remove UI + secret-reference resolution + a restart-server action.
 
 ---
 
@@ -441,9 +444,9 @@ Each one is a code path we are *not* writing this time. For carry-forward patter
 
 These are decisions we should make before or during scaffolding. Decisions already made live in `docs/DECISIONS.md`.
 
-1. **Secret store choice.** Stronghold vs. OS keychain (`tauri-plugin-keyring`) vs. encrypted SQLite column. Lean toward Stronghold for cross-platform consistency, but it's heavier.
+1. **Secret store choice.** ~~Stronghold vs. OS keychain (`tauri-plugin-keyring`) vs. encrypted SQLite column. Lean toward Stronghold for cross-platform consistency, but it's heavier.~~ **CLOSED 2026-05-26** — OS keychain via `keyring` crate. See `docs/DECISIONS.md`.
 2. **Session resumption across backends.** Claude Code and Codex have their own resume primitives; for direct-API, we replay messages. Should "switch backend mid-session" replay the conversation into the new backend (best effort), warn the user, or start fresh? Default: warn + start fresh, with an explicit "copy context" action.
-3. **Streaming protocol from Rust to webview.** Tauri events are simple but unordered under load. If we see ordering issues with high-frequency token streams, switch to a single per-process channel with sequence numbers.
-4. **Approval flow UX.** Inline in the chat stream or modal? Affects how `approval_request` events are surfaced.
-5. **MCP server lifecycle.** Per-session (spawn on session start, kill on close) or app-lifetime (spawn at app start, reuse across sessions)? Per-session is safer; app-lifetime is faster. Lean app-lifetime with explicit "restart MCP server" action.
+3. ~~**Streaming protocol from Rust to webview.** Tauri events are simple but unordered under load. If we see ordering issues with high-frequency token streams, switch to a single per-process channel with sequence numbers.~~ **CLOSED 2026-05-27** — per-handle Tauri events with topic isolation (`mcp:<handle>:stdout|stderr`), no sequence numbers. Justified by MCP message rates being far below the threshold the seq-number upgrade was reserved for. See `docs/DECISIONS.md` 2026-05-27 MCP stdio bridge entry.
+4. **Approval flow UX.** Inline in the chat stream or modal? Affects how `approval_request` events are surfaced. (Slice B of BACKLOG #6 forces this.)
+5. ~~**MCP server lifecycle.** Per-session (spawn on session start, kill on close) or app-lifetime (spawn at app start, reuse across sessions)? Per-session is safer; app-lifetime is faster. Lean app-lifetime with explicit "restart MCP server" action.~~ **CLOSED 2026-05-27** — app-lifetime with best-effort synchronous kill on `RunEvent::Exit`; the SIGTERM → 2s grace → SIGKILL pattern lives on the `stop_mcp_server` Tauri command instead. See `docs/DECISIONS.md` 2026-05-27 MCP stdio bridge entry.
 6. **Multi-window or single-window.** Single window is simpler for v1. Multi-window (one per session) is a nice-to-have but not required.
