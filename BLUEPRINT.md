@@ -2,7 +2,9 @@
 
   ## Agent Workflow
 
-  Standard loop: **plan → build → review → fix → verify → approve**.
+  Standard loop: **plan → build → review → fix → SWEEP → verify → re-review (loop) → approve**.
+
+  `SWEEP` is a blocking step (not optional, not end-of-slice-only) — see `## Between Review Iterations` below.
 
   - **Planner** writes the plan (you, or another agent driving the workflow).
   - **Builder** implements (Claude Code).
@@ -42,13 +44,28 @@
   .hermes/reviews/<task-name>.md"
   ```
 
-  - If REQUEST_CHANGES → read the review file, fix blockers, re-verify, request re-review.
+  - If REQUEST_CHANGES → read the review file, fix blockers, **run the Between-Review-Iterations sweep below**, re-verify, request re-review.
   - If APPROVED → proceed.
   - Record the verdict in the task DONE entry.
 
-  ## Update ALL Artifacts (before saying "done")
+  ## Between Review Iterations
 
-  STOP and do this before committing or claiming completion:
+  **BLOCKING STEP after every code fix, before re-issuing the review.** Skipping this is the most common cause of multi-round review loops where each round catches new artifact drift.
+
+  Procedure:
+
+  1. **List what the fix changed.** Concretely: new identifiers introduced, old identifiers removed, file paths created/moved/deleted, design phrases that no longer match shipped reality (e.g. "stdin writer task" → "inline write"). Write the list down explicitly — don't rely on memory.
+  2. **Grep each removed/changed term** across `MEMORY.md` + `<project>-map.md` + `<project>-tasks.md` + `docs/DECISIONS.md` + `docs/ARCHITECTURE.md` + the active plan file. Example: `grep -rn 'stdin_tx\|spawn_stdin_writer\|mpsc::Sender' <files>`. Cast the net wider than you think you need.
+  3. **For each hit, decide:** (a) update to the shipped wording, or (b) contextualize as historical narrative ("plan initially proposed... build-review round N caught..."). Both are valid; silence isn't.
+  4. **Run the verification suite** (tests / lint / typecheck / build / cargo / `git diff --check`).
+  5. **Re-grep with the same terms one more time.** If anything still surfaces outside contextualized history, fix before proceeding.
+  6. **Only now issue the re-review prompt.** Include in the prompt: what the round-N code fix changed + what the sweep covered + a request to grep-verify cross-artifact consistency.
+
+  Failure mode: patching the one stale reference Codex named, re-issuing, and discovering round N+1 catches three more. The grep in step 2 is the gate that prevents this. The cost of the extra greps is microseconds; the cost of a wasted review round is minutes plus the user's patience.
+
+  ## End-of-Slice Sweep (before saying "done")
+
+  STOP and do this before committing or claiming completion. This is the final pass, AFTER the loop has converged to APPROVED — the iteration-level sweep above keeps the loop short; this checklist makes sure nothing structural was missed at the end:
 
   - [ ] **State** (MEMORY.md "Current State") — update date, phase, capabilities, last shipped. Re-read after editing to 
   verify it matches reality.
