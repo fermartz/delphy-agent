@@ -571,7 +571,7 @@ function App() {
       />
 
       {toast ? (
-        <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 rounded bg-foreground px-4 py-2 text-xs text-background shadow-lg">
+        <div className="pointer-events-none fixed top-6 left-1/2 -translate-x-1/2 rounded bg-foreground px-4 py-2 text-xs text-background shadow-lg">
           {toast}
         </div>
       ) : null}
