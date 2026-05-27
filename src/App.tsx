@@ -112,6 +112,8 @@ function App() {
   // currently-active theme's JSON in place).
   const [themesVersion, setThemesVersion] = useState(0);
   const sessionRef = useRef<Session | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickyBottomRef = useRef(true);
 
   function triggerReboot() {
     setItems([]);
@@ -276,6 +278,21 @@ function App() {
     const cleanup = applyTheme(settings.selected_theme, settings.color_mode);
     return cleanup;
   }, [themesLoaded, themesVersion, settings.selected_theme, settings.color_mode]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: items is an effect-trigger — its array identity changes on every text delta via appendTextToInFlight, which is exactly when auto-scroll should re-run.
+  useEffect(() => {
+    if (!stickyBottomRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [items]);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickyBottomRef.current = distFromBottom < 32;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -486,7 +503,7 @@ function App() {
         />
       ) : null}
 
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
         {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {backend === "anthropic-api"
@@ -660,20 +677,20 @@ function renderItem(
   switch (it.kind) {
     case "user-text":
       return (
-        <span className="inline-block rounded-md bg-muted px-3 py-1.5 text-foreground">
+        <span className="inline-block rounded-md bg-muted px-3 py-1.5 text-sm text-foreground">
           {it.text}
         </span>
       );
     case "assistant-text":
       return (
-        <span className={it.status === "error" ? "text-red-600" : ""}>
+        <span className={`text-sm ${it.status === "error" ? "text-red-600" : ""}`}>
           {it.text}
           {it.status === "streaming" ? <span className="opacity-50">▍</span> : null}
         </span>
       );
     case "approval":
       return (
-        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs">
+        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm">
           <div className="font-medium text-amber-900">
             {it.verdict
               ? `Approval ${it.verdict} — ${it.action}`
@@ -707,14 +724,14 @@ function renderItem(
       );
     case "tool-call":
       return (
-        <div className="font-mono text-xs text-muted-foreground">
+        <div className="font-mono text-sm text-muted-foreground">
           → {it.name}({previewPayload(it.input)})
         </div>
       );
     case "tool-result":
       return (
         <pre
-          className={`font-mono text-xs whitespace-pre-wrap ${
+          className={`font-mono text-sm whitespace-pre-wrap ${
             it.isError ? "text-red-600" : "text-foreground"
           }`}
         >
@@ -723,7 +740,7 @@ function renderItem(
       );
     case "runtime-error":
       return (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs">
+        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
           <div className="font-medium text-red-900">{runtimeErrorTitle(it.errorKind)}</div>
           <div className="mt-1 text-red-800">{it.message}</div>
           {it.errorKind === "invalid-key" ? (
@@ -741,7 +758,7 @@ function renderItem(
       );
     case "system":
       return (
-        <pre className="font-mono text-xs whitespace-pre-wrap text-muted-foreground italic">
+        <pre className="font-mono text-sm whitespace-pre-wrap text-muted-foreground italic">
           {it.text}
         </pre>
       );

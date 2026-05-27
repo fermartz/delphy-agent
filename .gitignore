@@ -25,3 +25,8 @@ dist-ssr
 .hermes/
 memory/
 .claude/
+
+# Tauri auto-generates iOS + Android icon assets when `tauri icon` runs.
+# We're desktop-only; mobile assets get regenerated automatically if/when needed.
+src-tauri/icons/android/
+src-tauri/icons/ios/
