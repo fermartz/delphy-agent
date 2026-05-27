@@ -41,3 +41,13 @@ export interface McpTool {
   description?: string;
   inputSchema: unknown;
 }
+
+/**
+ * Normalized result from an MCP tool call. Mirrors the relevant fields from
+ * the MCP SDK's `CallToolResult` but exposed as our own type so the chat
+ * adapter doesn't import SDK types directly.
+ */
+export interface McpToolResult {
+  content: Array<{ type: string; text?: string; [key: string]: unknown }>;
+  isError: boolean;
+}

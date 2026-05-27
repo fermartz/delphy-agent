@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import { type ModelMessage, streamText } from "ai";
+import {
+  jsonSchema,
+  type ModelMessage,
+  stepCountIs,
+  streamText,
+  type ToolApprovalResponse,
+  type ToolSet,
+  tool,
+} from "ai";
 import { AuxiliaryClient } from "../llm/auxiliary";
+import { mcpManager } from "../mcp/manager";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
 import { getProvider } from "../providers";
 import { getRuntimeKey } from "../providers/anthropic-runtime-key";
@@ -17,18 +26,14 @@ import type {
 
 const PROVIDER_ID = "anthropic";
 
-// Char-based estimator per memory/decisions.md 2026-05-25 "Token estimation"
 const CHARS_PER_TOKEN_ANTHROPIC = 3.5;
 const CONTEXT_LIMIT_TOKENS = 200_000;
 const CONTEXT_WARN_THRESHOLD = 0.75;
 
-// Auto-compaction trigger (B.2 of v1 direct-API). Compaction fires before the
-// next chat turn when estimated usage crosses AUTO_COMPACT_THRESHOLD of the
-// context window. Anti-thrashing skips the trigger if the most-recent
-// compaction saved less than ANTI_THRASHING_MIN_SAVED_RATIO of tokens —
-// otherwise repeated triggers would churn without condensing.
 const AUTO_COMPACT_THRESHOLD = 0.85;
 const ANTI_THRASHING_MIN_SAVED_RATIO = 0.1;
+
+const APPROVAL_CYCLE_CAP = 5;
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN_ANTHROPIC);
@@ -41,13 +46,11 @@ function estimateMessageTokens(messages: ModelMessage[]): number {
       total += estimateTokens(m.content);
     } else if (Array.isArray(m.content)) {
       for (const part of m.content) {
-        if (
-          typeof part === "object" &&
-          part !== null &&
-          "text" in part &&
-          typeof part.text === "string"
-        ) {
+        if (typeof part !== "object" || part === null) continue;
+        if ("text" in part && typeof part.text === "string") {
           total += estimateTokens(part.text);
+        } else {
+          total += estimateTokens(JSON.stringify(part));
         }
       }
     }
@@ -127,6 +130,54 @@ function inferRuntimeErrorKind(err: unknown): RuntimeErrorKind {
   return "unknown";
 }
 
+type TurnState = "idle" | "streaming" | "awaiting_approval" | "closed";
+
+interface PendingApproval {
+  approvalId: string;
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  verdict?: { allowed: boolean; reason?: string };
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+type IterationOutcome =
+  | { outcome: "done"; finishReason: string }
+  | { outcome: "awaiting_approval" };
+
+function buildToolSet(): ToolSet | undefined {
+  const allTools = mcpManager.getAllTools();
+  if (allTools.length === 0) return undefined;
+  const toolSet: ToolSet = {};
+  for (const t of allTools) {
+    toolSet[t.namespacedName] = tool({
+      description: t.description ?? "",
+      inputSchema: jsonSchema(t.inputSchema as Record<string, unknown>),
+      needsApproval: true,
+      execute: async (input) => {
+        const result = await mcpManager.callTool(t.namespacedName, input);
+        return result;
+      },
+    });
+  }
+  return toolSet;
+}
+
 class DirectApiSession implements Session {
   readonly id: string;
 
@@ -143,15 +194,12 @@ class DirectApiSession implements Session {
 
   private currentAbort: AbortController | null = null;
 
-  // Fraction of total tokens saved by the most recent compaction (manual or
-  // auto). Drives the anti-thrashing skip on the next auto-trigger. `null`
-  // means "no compaction has run yet"; treated as "always allow first trigger."
   private lastCompactionSavedRatio: number | null = null;
-
-  // Re-entry guard for the rare case where a second trigger fires while a
-  // first is still running. Defensive; shouldn't happen under
-  // single-stream-at-a-time, but cheap insurance.
   private compactionInFlight = false;
+
+  private turnState: TurnState = "idle";
+  private pendingApprovals = new Map<string, PendingApproval>();
+  private pendingApprovalsWaiter: Deferred<void> | null = null;
 
   constructor(id: string, apiKey: string, modelId: string, auxiliaryModelId: string) {
     this.id = id;
@@ -188,6 +236,16 @@ class DirectApiSession implements Session {
   async sendMessage(text: string, _opts: SendOptions = {}): Promise<void> {
     if (this.eventsClosed) throw new Error("session closed");
 
+    if (this.turnState !== "idle") {
+      this.emitEvent({
+        type: "error",
+        error: new Error("Cannot send a new message while a turn is in progress"),
+        kind: "unknown",
+      });
+      this.emitEvent({ type: "done", reason: "error" });
+      return;
+    }
+
     this.messages.push({ role: "user", content: text });
 
     const tokensUsed = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
@@ -211,17 +269,8 @@ class DirectApiSession implements Session {
       return;
     }
 
-    // Hoist the AbortController creation so auto-compaction can route its
-    // auxiliary call through the same `signal` that `streamText` will use.
-    // `interrupt()` cancels both with one `abort()`.
     this.currentAbort = new AbortController();
 
-    // Auto-compaction trigger (B.2). Conditions:
-    //   - usage over threshold
-    //   - last compaction (if any) saved at least the anti-thrashing minimum
-    //   - no in-flight compaction (defensive)
-    // Failures are swallowed inside runAutoCompaction — the chat turn proceeds
-    // with un-compacted messages and a `system_message` surfaces the error.
     const allowedByAntiThrashing =
       this.lastCompactionSavedRatio === null ||
       this.lastCompactionSavedRatio >= ANTI_THRASHING_MIN_SAVED_RATIO;
@@ -232,60 +281,50 @@ class DirectApiSession implements Session {
     ) {
       await this.runAutoCompaction();
     }
-    let assistantText = "";
 
     try {
-      const model = profile.model(this.apiKey, this.modelId);
-      const result = streamText({
-        model,
-        // System prompt is sent as a structured SystemModelMessage so we can
-        // attach Anthropic's cache_control hint to the system block itself.
-        // Putting cacheControl in the top-level streamText providerOptions sends
-        // it as a top-level body field, which Anthropic silently ignores.
-        system: [
-          {
-            role: "system",
-            content: this.systemPrompt,
-            providerOptions: {
-              anthropic: { cacheControl: { type: "ephemeral" } },
-            },
-          },
-        ],
-        messages: this.messages,
-        headers: profile.headers?.(),
-        abortSignal: this.currentAbort.signal,
-      });
+      for (let cycle = 0; cycle < APPROVAL_CYCLE_CAP; cycle++) {
+        this.turnState = "streaming";
+        this.pendingApprovals.clear();
 
-      for await (const part of result.fullStream) {
-        if (part.type === "text-delta") {
-          assistantText += part.text;
-          this.emitEvent({ type: "text", delta: part.text });
-        } else if (part.type === "error") {
-          const err = part.error;
-          this.emitEvent({
-            type: "error",
-            error: err instanceof Error ? err : new Error(String(err)),
-            kind: inferRuntimeErrorKind(err),
-          });
-          this.emitEvent({ type: "done", reason: "error" });
-          return;
-        } else if (part.type === "abort") {
-          this.emitEvent({ type: "done", reason: "interrupted" });
+        const iterResult = await this.runStreamIteration(profile);
+
+        if (iterResult.outcome === "done") {
+          this.turnState = "idle";
+          const reason =
+            iterResult.finishReason === "stop" ||
+            iterResult.finishReason === "length" ||
+            iterResult.finishReason === "content-filter"
+              ? "complete"
+              : iterResult.finishReason === "error"
+                ? "error"
+                : "complete";
+          this.emitEvent({ type: "done", reason });
           return;
         }
+
+        this.turnState = "awaiting_approval";
+        try {
+          await this.awaitAllPendingApprovals();
+        } catch {
+          // Waiter was rejected by interrupt() or close().
+        }
+
+        if (this.turnState !== "awaiting_approval") return;
+
+        this.messages.push(this.buildApprovalResponseMessage());
+        this.pendingApprovals.clear();
       }
 
-      if (assistantText.length > 0) {
-        this.messages.push({ role: "assistant", content: assistantText });
-      }
-
-      const usage = await result.usage;
       this.emitEvent({
-        type: "usage",
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
+        type: "error",
+        error: new Error(
+          `tool-call iteration cap exceeded — ${APPROVAL_CYCLE_CAP} approval cycles per turn`,
+        ),
+        kind: "unknown",
       });
-      this.emitEvent({ type: "done", reason: "complete" });
+      this.emitEvent({ type: "done", reason: "error" });
+      this.turnState = "idle";
     } catch (err) {
       this.emitEvent({
         type: "error",
@@ -293,24 +332,202 @@ class DirectApiSession implements Session {
         kind: inferRuntimeErrorKind(err),
       });
       this.emitEvent({ type: "done", reason: "error" });
+      this.turnState = "idle";
     } finally {
       this.currentAbort = null;
     }
   }
 
+  private async runStreamIteration(
+    profile: ReturnType<typeof getProvider> & {},
+  ): Promise<IterationOutcome> {
+    const model = profile.model(this.apiKey, this.modelId);
+    const tools = buildToolSet();
+    const result = streamText({
+      model,
+      system: [
+        {
+          role: "system",
+          content: this.systemPrompt,
+          providerOptions: {
+            anthropic: { cacheControl: { type: "ephemeral" } },
+          },
+        },
+      ],
+      messages: this.messages,
+      headers: profile.headers?.(),
+      abortSignal: this.currentAbort?.signal,
+      ...(tools ? { tools, stopWhen: stepCountIs(APPROVAL_CYCLE_CAP) } : {}),
+    });
+
+    let finishReason = "stop";
+
+    for await (const part of result.fullStream) {
+      switch (part.type) {
+        case "text-delta":
+          this.emitEvent({ type: "text", delta: part.text });
+          break;
+
+        case "tool-call":
+          this.emitEvent({
+            type: "tool_call",
+            id: part.toolCallId,
+            name: part.toolName,
+            input: part.input,
+          });
+          break;
+
+        case "tool-approval-request":
+          this.pendingApprovals.set(part.approvalId, {
+            approvalId: part.approvalId,
+            toolCallId: part.toolCall.toolCallId,
+            toolName: part.toolCall.toolName,
+            input: part.toolCall.input,
+          });
+          this.emitEvent({
+            type: "approval_request",
+            id: part.approvalId,
+            action: part.toolCall.toolName,
+            payload: part.toolCall.input,
+          });
+          break;
+
+        case "tool-result":
+          this.emitEvent({
+            type: "tool_result",
+            id: part.toolCallId,
+            output: part.output,
+            isError: false,
+          });
+          break;
+
+        case "tool-error":
+          this.emitEvent({
+            type: "tool_result",
+            id: part.toolCallId,
+            output: String(part.error),
+            isError: true,
+          });
+          break;
+
+        case "tool-output-denied":
+          this.emitEvent({
+            type: "tool_result",
+            id: part.toolCallId,
+            output: "User denied tool execution",
+            isError: true,
+          });
+          break;
+
+        case "error": {
+          const err = part.error;
+          this.emitEvent({
+            type: "error",
+            error: err instanceof Error ? err : new Error(String(err)),
+            kind: inferRuntimeErrorKind(err),
+          });
+          break;
+        }
+
+        case "abort":
+          this.emitEvent({ type: "done", reason: "interrupted" });
+          this.turnState = "idle";
+          return { outcome: "done", finishReason: "abort" };
+
+        case "finish":
+          finishReason = part.finishReason;
+          break;
+
+        default:
+          break;
+      }
+    }
+
+    const resp = await result.response;
+    this.messages.push(...(resp.messages as ModelMessage[]));
+
+    const usage = await result.usage;
+    this.emitEvent({
+      type: "usage",
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+    });
+
+    if (finishReason === "tool-calls" && this.pendingApprovals.size > 0) {
+      return { outcome: "awaiting_approval" };
+    }
+
+    return { outcome: "done", finishReason };
+  }
+
+  async respondToApproval(id: string, allowed: boolean): Promise<void> {
+    if (this.turnState !== "awaiting_approval") {
+      console.warn(`[direct-api] respondToApproval called in state "${this.turnState}", ignoring.`);
+      return;
+    }
+    const entry = this.pendingApprovals.get(id);
+    if (!entry) {
+      console.warn(`[direct-api] respondToApproval: unknown approvalId "${id}"`);
+      return;
+    }
+    if (entry.verdict) return;
+    entry.verdict = {
+      allowed,
+      reason: allowed ? undefined : "User denied tool execution",
+    };
+
+    const allResolved = Array.from(this.pendingApprovals.values()).every((p) => p.verdict);
+    if (allResolved) {
+      this.pendingApprovalsWaiter?.resolve();
+    }
+  }
+
+  private awaitAllPendingApprovals(): Promise<void> {
+    const allResolved = Array.from(this.pendingApprovals.values()).every((p) => p.verdict);
+    if (allResolved) return Promise.resolve();
+    this.pendingApprovalsWaiter = createDeferred<void>();
+    return this.pendingApprovalsWaiter.promise;
+  }
+
+  private buildApprovalResponseMessage(): ModelMessage {
+    const content: ToolApprovalResponse[] = [];
+    for (const entry of this.pendingApprovals.values()) {
+      if (!entry.verdict) continue;
+      content.push({
+        type: "tool-approval-response",
+        approvalId: entry.approvalId,
+        approved: entry.verdict.allowed,
+        reason: entry.verdict.reason,
+      });
+    }
+    return { role: "tool", content } as ModelMessage;
+  }
+
   async interrupt(): Promise<void> {
+    const wasAwaitingApproval = this.turnState === "awaiting_approval";
     this.currentAbort?.abort();
+    this.pendingApprovals.clear();
+    if (this.pendingApprovalsWaiter) {
+      this.pendingApprovalsWaiter.reject(new Error("interrupted"));
+      this.pendingApprovalsWaiter = null;
+    }
+    this.turnState = "idle";
+    if (wasAwaitingApproval) {
+      this.emitEvent({ type: "done", reason: "interrupted" });
+    }
   }
 
   async close(): Promise<void> {
     this.currentAbort?.abort();
+    this.pendingApprovals.clear();
+    if (this.pendingApprovalsWaiter) {
+      this.pendingApprovalsWaiter.reject(new Error("closed"));
+      this.pendingApprovalsWaiter = null;
+    }
+    this.turnState = "closed";
     this.eventsClosed = true;
     this.resolveNextEvent?.();
     this.resolveNextEvent = null;
-  }
-
-  async respondToApproval(_id: string, _allowed: boolean): Promise<void> {
-    // No tool surface in v1 — MCP lands in BACKLOG #6. Method exists to satisfy Session contract.
   }
 
   private async runAutoCompaction(): Promise<void> {
@@ -425,3 +642,5 @@ export const directApiAdapter: BackendAdapter = {
     );
   },
 };
+
+export { DirectApiSession as _DirectApiSessionForTests };

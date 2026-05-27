@@ -12,12 +12,10 @@ vi.mock("@tauri-apps/api/event", () => ({
 // machinery. Each test sets the connect/listTools behavior it wants.
 const connectMock = vi.fn();
 const listToolsMock = vi.fn();
+const callToolMock = vi.fn();
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  // Plain function (NOT arrow) that returns the mock instance — arrow
-  // functions can't be `new`'d, so the manager's `new Client(...)` would
-  // throw "is not a constructor."
   Client: function MockClient() {
-    return { connect: connectMock, listTools: listToolsMock };
+    return { connect: connectMock, listTools: listToolsMock, callTool: callToolMock };
   },
 }));
 
@@ -42,6 +40,7 @@ describe("McpManager", () => {
   beforeEach(() => {
     connectMock.mockReset();
     listToolsMock.mockReset();
+    callToolMock.mockReset();
     mockedInvoke.mockReset();
     mockedListen.mockReset();
     // listen returns a no-op unlisten; the transport's start() awaits it.
@@ -118,5 +117,68 @@ describe("McpManager", () => {
     expect(mockedInvoke).not.toHaveBeenCalledWith("spawn_mcp_server", expect.anything());
     expect(connectMock).not.toHaveBeenCalled();
     expect(listToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("callTool returns the normalized result from a connected server", async () => {
+    mockedInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "spawn_mcp_server") return "test-server";
+      if (cmd === "stop_mcp_server") return undefined;
+      return undefined;
+    }) as typeof invoke);
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockResolvedValue({
+      tools: [{ name: "echo", description: "Echoes", inputSchema: { type: "object" } }],
+    });
+    callToolMock.mockResolvedValue({
+      content: [{ type: "text", text: "hello world" }],
+      isError: false,
+    });
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([ENABLED_CONFIG]);
+
+    const result = await mgr.callTool("test-server__echo", { message: "hello" });
+    expect(result.isError).toBe(false);
+    expect(result.content).toEqual([{ type: "text", text: "hello world" }]);
+    expect(callToolMock).toHaveBeenCalledWith({
+      name: "echo",
+      arguments: { message: "hello" },
+    });
+  });
+
+  it("callTool returns isError when the server is not connected", async () => {
+    mockedInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "spawn_mcp_server") return "test-server";
+      if (cmd === "stop_mcp_server") return undefined;
+      return undefined;
+    }) as typeof invoke);
+    connectMock.mockRejectedValue(new Error("refused"));
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([ENABLED_CONFIG]);
+
+    const result = await mgr.callTool("test-server__echo", {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("not connected");
+  });
+
+  it("callTool returns isError when client.callTool throws", async () => {
+    mockedInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "spawn_mcp_server") return "test-server";
+      if (cmd === "stop_mcp_server") return undefined;
+      return undefined;
+    }) as typeof invoke);
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockResolvedValue({
+      tools: [{ name: "echo", inputSchema: { type: "object" } }],
+    });
+    callToolMock.mockRejectedValue(new Error("network failure"));
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([ENABLED_CONFIG]);
+
+    const result = await mgr.callTool("test-server__echo", {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("network failure");
   });
 });

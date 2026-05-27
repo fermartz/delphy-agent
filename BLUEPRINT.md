@@ -26,6 +26,16 @@
   4. For non-trivial work, write a brief plan in `.hermes/plans/` and get user approval BEFORE coding.
   5. Make the smallest clean change that satisfies the task. No unrelated rewrites.
 
+  ### Plan scope and size
+
+  Plans should be **concise** — aim for **under 200 lines**. A plan is a contract for *what* to build and *why*, not a design spec for *how*. Implementation details (state machines, pseudocode, message shapes, exact type signatures) belong in the code, not the plan.
+
+  **What belongs in a plan:** slice purpose, success criteria, scope (in/out), key design decisions (locked parameters), checkpoints, risks with mitigations.
+
+  **What does NOT belong:** pseudocode, exact function signatures, exhaustive type definitions, step-by-step state transitions, SDK type spellings. These create a second source of truth that the reviewer audits for consistency with the code — generating review rounds that catch documentation drift, not real bugs.
+
+  **Lesson learned (slice B, 2026-05-28):** the MCP slice B plan grew to 339 lines / 70KB across 4 revision rounds. Each round added more implementation detail to "fix" a reviewer finding, which created new surface area for the next round to catch. The reviews were accurate but the errors were self-inflicted — caused by the plan over-specifying things that should have been decided during implementation.
+
   ## Before Finishing
 
   Run the project's verification suite. Example shape:

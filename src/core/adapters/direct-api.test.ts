@@ -31,6 +31,15 @@ vi.mock("../session/compactor", async () => {
   };
 });
 
+const mockGetAllTools = vi.fn();
+const mockCallTool = vi.fn();
+vi.mock("../mcp/manager", () => ({
+  mcpManager: {
+    getAllTools: (...args: unknown[]) => mockGetAllTools(...args),
+    callTool: (...args: unknown[]) => mockCallTool(...args),
+  },
+}));
+
 import { invoke } from "@tauri-apps/api/core";
 import { generateText, streamText } from "ai";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
@@ -46,20 +55,36 @@ const mockedCompactMessages = vi.mocked(compactMessages);
 
 function fakeStreamResult(
   parts: Array<Record<string, unknown>>,
-  usage: { inputTokens?: number; outputTokens?: number } = {
-    inputTokens: 10,
-    outputTokens: 20,
-  },
+  options: {
+    usage?: { inputTokens?: number; outputTokens?: number };
+    responseMessages?: Array<Record<string, unknown>>;
+    finishReason?: string;
+  } = {},
 ): Any {
+  const usage = options.usage ?? { inputTokens: 10, outputTokens: 20 };
+  const finishReason = options.finishReason ?? "stop";
+  const textParts = parts.filter((p) => p.type === "text-delta");
+  const fullText = textParts.map((p) => p.text).join("");
+  const defaultResponseMessages: Array<Record<string, unknown>> =
+    fullText.length > 0 ? [{ role: "assistant", content: fullText }] : [];
+  const responseMessages = options.responseMessages ?? defaultResponseMessages;
+  const hasFinish = parts.some((p) => p.type === "finish");
+  const hasAbort = parts.some((p) => p.type === "abort");
   return {
     fullStream: (async function* () {
       for (const p of parts) yield p;
+      if (!hasFinish && !hasAbort) {
+        yield { type: "finish", finishReason, rawFinishReason: finishReason, totalUsage: usage };
+      }
     })(),
     usage: Promise.resolve({ ...usage, totalTokens: 30 }),
-    finishReason: Promise.resolve("stop"),
-    text: Promise.resolve(""),
+    finishReason: Promise.resolve(finishReason),
+    text: Promise.resolve(fullText),
     toolCalls: Promise.resolve([]),
     totalUsage: Promise.resolve({ ...usage, totalTokens: 30 }),
+    response: Promise.resolve({
+      messages: responseMessages,
+    }),
   };
 }
 
@@ -79,15 +104,15 @@ beforeEach(() => {
   mockedStreamText.mockReset();
   mockedGenerateText.mockReset();
   mockedCompactMessages.mockReset();
-  // Default: compaction returns unchanged so tests that don't care about the
-  // compactor (the majority) don't accidentally mutate the messages array if
-  // the trigger fires from a large fixture.
+  mockGetAllTools.mockReset();
+  mockCallTool.mockReset();
   mockedCompactMessages.mockResolvedValue({
     unchanged: true,
     compactedMessages: [],
     summary: "",
     metrics: { before: 0, after: 0, estimatedTokensSaved: 0 },
   } as Any);
+  mockGetAllTools.mockReturnValue([]);
   clearRuntimeKey();
 });
 
@@ -169,7 +194,9 @@ describe("directApiAdapter — event mapping", () => {
 
   it("error part with statusCode 401 → AgentEvent.error kind=invalid-key, then done(error)", async () => {
     mockedStreamText.mockReturnValueOnce(
-      fakeStreamResult([{ type: "error", error: { statusCode: 401, message: "Unauthorized" } }]),
+      fakeStreamResult([{ type: "error", error: { statusCode: 401, message: "Unauthorized" } }], {
+        finishReason: "error",
+      }),
     );
 
     const session = await startSession();
@@ -177,8 +204,8 @@ describe("directApiAdapter — event mapping", () => {
     await session.sendMessage("hi");
     const events = await collectOneTurn(iter);
 
-    expect(events.map((e) => e.type)).toEqual(["error", "done"]);
-    const [err, done] = events;
+    expect(events.map((e) => e.type)).toEqual(["error", "usage", "done"]);
+    const [err, , done] = events;
     expect(err.type === "error" && err.kind).toBe("invalid-key");
     expect(done.type === "done" && done.reason).toBe("error");
 
@@ -187,9 +214,10 @@ describe("directApiAdapter — event mapping", () => {
 
   it("error part with statusCode 429 → kind=rate-limited", async () => {
     mockedStreamText.mockReturnValueOnce(
-      fakeStreamResult([
-        { type: "error", error: { statusCode: 429, message: "Too many requests" } },
-      ]),
+      fakeStreamResult(
+        [{ type: "error", error: { statusCode: 429, message: "Too many requests" } }],
+        { finishReason: "error" },
+      ),
     );
 
     const session = await startSession();
@@ -205,7 +233,10 @@ describe("directApiAdapter — event mapping", () => {
 
   it("error part with statusCode 404 → kind=model-deprecated", async () => {
     mockedStreamText.mockReturnValueOnce(
-      fakeStreamResult([{ type: "error", error: { statusCode: 404, message: "model_not_found" } }]),
+      fakeStreamResult(
+        [{ type: "error", error: { statusCode: 404, message: "model_not_found" } }],
+        { finishReason: "error" },
+      ),
     );
 
     const session = await startSession();
@@ -419,5 +450,551 @@ describe("anthropic runtime-key module", () => {
     setRuntimeKey("test-key");
     clearRuntimeKey();
     expect(getRuntimeKey()).toBe(null);
+  });
+});
+
+describe("directApiAdapter — tool wiring + approval flow", () => {
+  async function startSession(): Promise<Session> {
+    mockedInvoke.mockResolvedValueOnce("sk-ant-test");
+    return directApiAdapter.start({});
+  }
+
+  function setupToolMock() {
+    mockGetAllTools.mockReturnValue([
+      {
+        serverId: "test-server",
+        name: "echo",
+        namespacedName: "test-server__echo",
+        description: "Echoes input",
+        inputSchema: { type: "object", properties: { message: { type: "string" } } },
+      },
+    ]);
+  }
+
+  it("tool-call part → tool_call AgentEvent emission", async () => {
+    setupToolMock();
+    mockedStreamText.mockReturnValueOnce(
+      fakeStreamResult([
+        {
+          type: "tool-call",
+          toolCallId: "tc-1",
+          toolName: "test-server__echo",
+          input: { message: "hello" },
+        },
+        { type: "text-delta", text: "Done." },
+      ]),
+    );
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+    await session.sendMessage("echo hello");
+    const events = await collectOneTurn(iter);
+
+    const tc = events.find((e) => e.type === "tool_call");
+    expect(tc).toBeDefined();
+    expect(tc?.type === "tool_call" && tc.name).toBe("test-server__echo");
+    expect(tc?.type === "tool_call" && tc.input).toEqual({ message: "hello" });
+    await session.close();
+  });
+
+  it("tool-approval-request part → approval_request AgentEvent + awaiting_approval", async () => {
+    setupToolMock();
+    const approvalStream = fakeStreamResult(
+      [
+        {
+          type: "tool-call",
+          toolCallId: "tc-1",
+          toolName: "test-server__echo",
+          input: { message: "hello" },
+        },
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: {
+            type: "tool-call",
+            toolCallId: "tc-1",
+            toolName: "test-server__echo",
+            input: { message: "hello" },
+          },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+
+    const resumeStream = fakeStreamResult([{ type: "text-delta", text: "Echoed!" }]);
+
+    mockedStreamText.mockReturnValueOnce(approvalStream);
+    mockedStreamText.mockReturnValueOnce(resumeStream);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("echo hello");
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    await session.respondToApproval("ap-1", true);
+    await sendPromise;
+    const events = await collectOneTurn(iter);
+
+    const ar = events.find((e) => e.type === "approval_request");
+    expect(ar).toBeDefined();
+    expect(ar?.type === "approval_request" && ar.id).toBe("ap-1");
+    expect(ar?.type === "approval_request" && ar.action).toBe("test-server__echo");
+    expect(mockedStreamText).toHaveBeenCalledTimes(2);
+    await session.close();
+  });
+
+  it("respondToApproval(true) resumes execution → tool-result → done(complete)", async () => {
+    setupToolMock();
+    mockCallTool.mockResolvedValue({
+      content: [{ type: "text", text: "echoed: hello" }],
+      isError: false,
+    });
+
+    const approvalStream = fakeStreamResult(
+      [
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: {
+            type: "tool-call",
+            toolCallId: "tc-1",
+            toolName: "test-server__echo",
+            input: { message: "hello" },
+          },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+
+    const resumeStream = fakeStreamResult([
+      {
+        type: "tool-result",
+        toolCallId: "tc-1",
+        toolName: "test-server__echo",
+        input: { message: "hello" },
+        output: { content: [{ type: "text", text: "echoed: hello" }], isError: false },
+      },
+      { type: "text-delta", text: "All done." },
+    ]);
+
+    mockedStreamText.mockReturnValueOnce(approvalStream);
+    mockedStreamText.mockReturnValueOnce(resumeStream);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("echo hello");
+    await new Promise((r) => setTimeout(r, 10));
+    await session.respondToApproval("ap-1", true);
+    await sendPromise;
+    const events = await collectOneTurn(iter);
+
+    const tr = events.find((e) => e.type === "tool_result");
+    expect(tr).toBeDefined();
+    expect(tr?.type === "tool_result" && tr.isError).toBe(false);
+    const done = events.find((e) => e.type === "done");
+    expect(done?.type === "done" && done.reason).toBe("complete");
+    await session.close();
+  });
+
+  it("respondToApproval(false) → denied tool-result → done(complete)", async () => {
+    setupToolMock();
+
+    const approvalStream = fakeStreamResult(
+      [
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: {
+            type: "tool-call",
+            toolCallId: "tc-1",
+            toolName: "test-server__echo",
+            input: { message: "hello" },
+          },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+
+    const resumeStream = fakeStreamResult([
+      {
+        type: "tool-output-denied",
+        toolCallId: "tc-1",
+        toolName: "test-server__echo",
+      },
+      { type: "text-delta", text: "I understand." },
+    ]);
+
+    mockedStreamText.mockReturnValueOnce(approvalStream);
+    mockedStreamText.mockReturnValueOnce(resumeStream);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("echo hello");
+    await new Promise((r) => setTimeout(r, 10));
+    await session.respondToApproval("ap-1", false);
+    await sendPromise;
+    const events = await collectOneTurn(iter);
+
+    const tr = events.find((e) => e.type === "tool_result");
+    expect(tr).toBeDefined();
+    expect(tr?.type === "tool_result" && tr.isError).toBe(true);
+    expect(tr?.type === "tool_result" && tr.output).toBe("User denied tool execution");
+    const done = events.find((e) => e.type === "done");
+    expect(done?.type === "done" && done.reason).toBe("complete");
+    await session.close();
+  });
+
+  it("tool-less chat: no tools arg when getAllTools returns empty", async () => {
+    mockGetAllTools.mockReturnValue([]);
+    mockedStreamText.mockReturnValueOnce(
+      fakeStreamResult([{ type: "text-delta", text: "No tools here." }]),
+    );
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+    await session.sendMessage("hi");
+    const events = await collectOneTurn(iter);
+
+    expect(events.some((e) => e.type === "text")).toBe(true);
+    const callArgs = mockedStreamText.mock.calls[0]?.[0] as Any;
+    expect(callArgs.tools).toBeUndefined();
+    await session.close();
+  });
+
+  it("multi-tool chained turn: model uses tool A → approve → tool B → approve → done", async () => {
+    setupToolMock();
+
+    const stream1 = fakeStreamResult(
+      [
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: { type: "tool-call", toolCallId: "tc-1", toolName: "echo", input: {} },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+    const stream2 = fakeStreamResult(
+      [
+        {
+          type: "tool-result",
+          toolCallId: "tc-1",
+          toolName: "echo",
+          input: {},
+          output: "result-1",
+        },
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-2",
+          toolCall: { type: "tool-call", toolCallId: "tc-2", toolName: "echo", input: {} },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+    const stream3 = fakeStreamResult([{ type: "text-delta", text: "All done." }]);
+
+    mockedStreamText.mockReturnValueOnce(stream1);
+    mockedStreamText.mockReturnValueOnce(stream2);
+    mockedStreamText.mockReturnValueOnce(stream3);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("chain");
+    await new Promise((r) => setTimeout(r, 10));
+    await session.respondToApproval("ap-1", true);
+    await new Promise((r) => setTimeout(r, 10));
+    await session.respondToApproval("ap-2", true);
+    await sendPromise;
+    const events = await collectOneTurn(iter);
+
+    expect(mockedStreamText).toHaveBeenCalledTimes(3);
+    const done = events.find((e) => e.type === "done");
+    expect(done?.type === "done" && done.reason).toBe("complete");
+    await session.close();
+  });
+
+  it("multi-tool parallel: 2 approval requests in one iteration, both resolved", async () => {
+    setupToolMock();
+
+    const stream1 = fakeStreamResult(
+      [
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: { type: "tool-call", toolCallId: "tc-1", toolName: "echo", input: { a: 1 } },
+        },
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-2",
+          toolCall: { type: "tool-call", toolCallId: "tc-2", toolName: "echo", input: { b: 2 } },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+    const stream2 = fakeStreamResult([{ type: "text-delta", text: "Both done." }]);
+
+    mockedStreamText.mockReturnValueOnce(stream1);
+    mockedStreamText.mockReturnValueOnce(stream2);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("parallel");
+    await new Promise((r) => setTimeout(r, 10));
+    await session.respondToApproval("ap-1", true);
+    await session.respondToApproval("ap-2", true);
+    await sendPromise;
+    const events = await collectOneTurn(iter);
+
+    expect(mockedStreamText).toHaveBeenCalledTimes(2);
+    const approvals = events.filter((e) => e.type === "approval_request");
+    expect(approvals).toHaveLength(2);
+    await session.close();
+  });
+
+  it("approval-cycle cap exceeded → AgentEvent.error + done(error)", async () => {
+    setupToolMock();
+
+    for (let i = 0; i < 6; i++) {
+      mockedStreamText.mockReturnValueOnce(
+        fakeStreamResult(
+          [
+            {
+              type: "tool-approval-request",
+              approvalId: `ap-${i}`,
+              toolCall: {
+                type: "tool-call",
+                toolCallId: `tc-${i}`,
+                toolName: "echo",
+                input: {},
+              },
+            },
+          ],
+          { finishReason: "tool-calls" },
+        ),
+      );
+    }
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("loop");
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      await session.respondToApproval(`ap-${i}`, true);
+    }
+    await sendPromise;
+    const events = await collectOneTurn(iter);
+
+    const err = events.find((e) => e.type === "error");
+    expect(err).toBeDefined();
+    expect(err?.type === "error" && err.error.message).toMatch(/cap exceeded/);
+    const done = events.find((e) => e.type === "done");
+    expect(done?.type === "done" && done.reason).toBe("error");
+    expect(mockedStreamText).toHaveBeenCalledTimes(5);
+    await session.close();
+  });
+
+  it("sendMessage rejected while awaiting approval → error + done(error)", async () => {
+    setupToolMock();
+
+    const stream1 = fakeStreamResult(
+      [
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: { type: "tool-call", toolCallId: "tc-1", toolName: "echo", input: {} },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+    const stream2 = fakeStreamResult([{ type: "text-delta", text: "ok" }]);
+
+    mockedStreamText.mockReturnValueOnce(stream1);
+    mockedStreamText.mockReturnValueOnce(stream2);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise1 = session.sendMessage("first");
+    await new Promise((r) => setTimeout(r, 10));
+
+    await session.sendMessage("second while awaiting");
+
+    await session.respondToApproval("ap-1", true);
+    await sendPromise1;
+
+    const events: AgentEvent[] = [];
+    while (true) {
+      const r = await iter.next();
+      if (r.done) break;
+      events.push(r.value);
+      if (events.filter((e) => e.type === "done").length >= 2) break;
+    }
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(
+      errors.some((e) => e.type === "error" && e.error.message.includes("turn is in progress")),
+    ).toBe(true);
+    await session.close();
+  });
+
+  it("sendMessage rejected while streaming → error + done(error)", async () => {
+    setupToolMock();
+
+    let resolveBlock!: () => void;
+    const blockingStream = {
+      fullStream: (async function* () {
+        yield { type: "text-delta" as const, text: "thinking" };
+        await new Promise<void>((r) => {
+          resolveBlock = r;
+        });
+        yield {
+          type: "finish" as const,
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          totalUsage: { inputTokens: 10, outputTokens: 20 },
+        };
+      })(),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 20, totalTokens: 30 }),
+      finishReason: Promise.resolve("stop"),
+      text: Promise.resolve("thinking"),
+      toolCalls: Promise.resolve([]),
+      totalUsage: Promise.resolve({ inputTokens: 10, outputTokens: 20, totalTokens: 30 }),
+      response: Promise.resolve({ messages: [{ role: "assistant", content: "thinking" }] }),
+    };
+
+    mockedStreamText.mockReturnValueOnce(blockingStream as Any);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise1 = session.sendMessage("first");
+    await new Promise((r) => setTimeout(r, 10));
+
+    await session.sendMessage("second while streaming");
+
+    resolveBlock();
+    await sendPromise1;
+
+    const events: AgentEvent[] = [];
+    while (true) {
+      const r = await iter.next();
+      if (r.done) break;
+      events.push(r.value);
+      if (events.filter((e) => e.type === "done").length >= 2) break;
+    }
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(
+      errors.some((e) => e.type === "error" && e.error.message.includes("turn is in progress")),
+    ).toBe(true);
+    await session.close();
+  });
+
+  it("close() mid-await → pending cleared, turnState closed, no resume", async () => {
+    setupToolMock();
+
+    const stream1 = fakeStreamResult(
+      [
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: { type: "tool-call", toolCallId: "tc-1", toolName: "echo", input: {} },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+
+    mockedStreamText.mockReturnValueOnce(stream1);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("close me");
+    await new Promise((r) => setTimeout(r, 10));
+    await session.close();
+
+    await sendPromise.catch(() => {});
+
+    expect(mockedStreamText).toHaveBeenCalledTimes(1);
+
+    // Drain any remaining buffered events (approval_request, usage, etc.)
+    // until the iterator terminates (eventsClosed = true).
+    const remaining: AgentEvent[] = [];
+    while (true) {
+      const r = await iter.next();
+      if (r.done) break;
+      remaining.push(r.value);
+    }
+    // No done(complete) or resume — close terminated the session.
+    expect(remaining.filter((e) => e.type === "done" && e.reason === "complete")).toHaveLength(0);
+  });
+
+  it("interrupt() mid-await → done(interrupted), session continues", async () => {
+    setupToolMock();
+
+    const stream1 = fakeStreamResult(
+      [
+        {
+          type: "tool-approval-request",
+          approvalId: "ap-1",
+          toolCall: { type: "tool-call", toolCallId: "tc-1", toolName: "echo", input: {} },
+        },
+      ],
+      { finishReason: "tool-calls" },
+    );
+    const nextStream = fakeStreamResult([{ type: "text-delta", text: "next turn" }]);
+
+    mockedStreamText.mockReturnValueOnce(stream1);
+    mockedStreamText.mockReturnValueOnce(nextStream);
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise1 = session.sendMessage("interrupt me");
+    await new Promise((r) => setTimeout(r, 10));
+    await session.interrupt();
+    await sendPromise1.catch(() => {});
+
+    const events1 = await collectOneTurn(iter);
+    const done1 = events1.find((e) => e.type === "done");
+    expect(done1?.type === "done" && done1.reason).toBe("interrupted");
+
+    await session.sendMessage("continue");
+    const events2 = await collectOneTurn(iter);
+    expect(events2.some((e) => e.type === "text")).toBe(true);
+
+    await session.close();
+  });
+
+  it("interrupt() during streaming → no double done event", async () => {
+    setupToolMock();
+    mockedStreamText.mockReturnValueOnce(
+      fakeStreamResult([
+        { type: "text-delta", text: "streaming..." },
+        { type: "abort", reason: "user" },
+      ]),
+    );
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise = session.sendMessage("interrupt during stream");
+    await new Promise((r) => setTimeout(r, 5));
+    await session.interrupt();
+    await sendPromise.catch(() => {});
+
+    const events = await collectOneTurn(iter);
+    const doneEvents = events.filter((e) => e.type === "done");
+    expect(doneEvents).toHaveLength(1);
+    expect(doneEvents[0].type === "done" && doneEvents[0].reason).toBe("interrupted");
+
+    await session.close();
   });
 });

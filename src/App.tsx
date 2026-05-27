@@ -496,7 +496,12 @@ function App() {
       : backend === "echo-fallback"
         ? "echo (fallback)"
         : "…";
-  const inputDisabled = streaming || !ready || (backend === "echo-fallback" && bootError !== null);
+  const hasPendingApproval = items.some((it) => it.kind === "approval" && it.verdict === undefined);
+  const inputDisabled =
+    streaming ||
+    !ready ||
+    hasPendingApproval ||
+    (backend === "echo-fallback" && bootError !== null);
   const activityLabel = !ready ? "Connecting…" : streaming ? "Streaming…" : "Ready";
   const COMMAND_HINTS = ["/help", "/clear", "/model", "/compact"];
 

@@ -2,9 +2,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { invoke } from "@tauri-apps/api/core";
 import { BUILTIN_MCP_CONFIGS } from "./configs";
 import { TauriTransport } from "./tauri-transport";
-import type { McpServerConfig, McpServerStatus, McpTool } from "./types";
+import type { McpServerConfig, McpServerStatus, McpTool, McpToolResult } from "./types";
 
 const INIT_TIMEOUT_MS = 30_000;
+const CALL_TOOL_TIMEOUT_MS = 30_000;
 
 interface ConnectedServer {
   config: McpServerConfig;
@@ -76,6 +77,42 @@ class McpManager {
       }
     }
     return out;
+  }
+
+  async callTool(namespacedName: string, args: unknown): Promise<McpToolResult> {
+    const sep = namespacedName.indexOf("__");
+    if (sep === -1) {
+      return {
+        content: [{ type: "text", text: `Invalid namespaced tool name: ${namespacedName}` }],
+        isError: true,
+      };
+    }
+    const serverId = namespacedName.slice(0, sep);
+    const toolName = namespacedName.slice(sep + 2);
+    const entry = this.servers.get(serverId);
+    if (!entry || entry.kind !== "connected") {
+      return {
+        content: [{ type: "text", text: `MCP server "${serverId}" is not connected` }],
+        isError: true,
+      };
+    }
+    try {
+      const result = await withTimeout(
+        entry.data.client.callTool({ name: toolName, arguments: args as Record<string, unknown> }),
+        CALL_TOOL_TIMEOUT_MS,
+        `callTool ${namespacedName}`,
+      );
+      const content = Array.isArray(result.content)
+        ? (result.content as McpToolResult["content"])
+        : [{ type: "text", text: String(result.content) }];
+      return { content, isError: result.isError === true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text", text: `Tool call failed: ${message}` }],
+        isError: true,
+      };
+    }
   }
 
   async shutdown(): Promise<void> {
