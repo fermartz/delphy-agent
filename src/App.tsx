@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import { ChatIcon } from "@/components/chat-icon";
 import { ColorModeToggle } from "@/components/color-mode-toggle";
+import MarkdownText from "@/components/markdown-text";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
 import { ThemeSwitcher } from "@/components/theme-switcher";
@@ -677,16 +678,15 @@ function renderItem(
   switch (it.kind) {
     case "user-text":
       return (
-        <span className="inline-block rounded-md bg-muted px-3 py-1.5 text-sm text-foreground">
+        <span className="inline-block rounded-md bg-muted px-3 py-1.5 text-sm text-foreground whitespace-pre-wrap">
           {it.text}
         </span>
       );
     case "assistant-text":
       return (
-        <span className={`text-sm ${it.status === "error" ? "text-red-600" : ""}`}>
-          {it.text}
-          {it.status === "streaming" ? <span className="opacity-50">▍</span> : null}
-        </span>
+        <div className={`text-sm ${it.status === "error" ? "text-red-600" : ""}`}>
+          <MarkdownText>{it.text}</MarkdownText>
+        </div>
       );
     case "approval":
       return (
