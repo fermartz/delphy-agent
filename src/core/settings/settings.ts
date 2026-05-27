@@ -1,6 +1,6 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { DEFAULT_SETTINGS } from "./defaults";
-import type { ColorMode, Settings, WindowState } from "./types";
+import type { ColorMode, Settings } from "./types";
 
 const STORE_FILE = "settings.json";
 const VALID_COLOR_MODES: readonly ColorMode[] = ["light", "dark", "system"];
@@ -26,16 +26,6 @@ function isColorMode(value: unknown): value is ColorMode {
   return isString(value) && (VALID_COLOR_MODES as readonly string[]).includes(value);
 }
 
-function isWindowState(value: unknown): value is WindowState | null {
-  if (value === null) return true;
-  if (typeof value !== "object") return false;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.width !== "number" || typeof obj.height !== "number") return false;
-  if (obj.x !== null && typeof obj.x !== "number") return false;
-  if (obj.y !== null && typeof obj.y !== "number") return false;
-  return true;
-}
-
 async function readField<T>(
   store: Store,
   key: keyof Settings,
@@ -44,8 +34,8 @@ async function readField<T>(
   const raw = await store.get<unknown>(key);
   // Only `undefined` means the key is absent. An explicit `null` (or any other
   // value) must pass through the validator — the spec says invalid persisted
-  // values warn + fall back, and `null` is invalid for every field except
-  // window_state (whose validator allows it).
+  // values warn + fall back, and `null` is invalid for every Settings field
+  // (all string-typed after window_state's removal).
   if (raw === undefined) {
     return { found: false, invalid: false };
   }
@@ -84,9 +74,6 @@ export async function loadSettings(): Promise<Settings> {
 
   const aux = await readField(store, "auxiliary_model", isString);
   if (aux.found) settings.auxiliary_model = aux.value;
-
-  const win = await readField(store, "window_state", isWindowState);
-  if (win.found) settings.window_state = win.value;
 
   return settings;
 }

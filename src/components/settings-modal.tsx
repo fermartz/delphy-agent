@@ -21,6 +21,7 @@ export interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentModel: string;
+  currentAuxiliaryModel: string;
   availableModels: string[] | null;
   modelsLoading: boolean;
   modelsError: string | null;
@@ -28,6 +29,7 @@ export interface SettingsModalProps {
   selectedThemeId: string;
   colorMode: ColorMode;
   onSelectModel: (model: string) => void;
+  onSelectAuxiliaryModel: (model: string) => void;
   onThemeChange: (themeId: string) => void;
   onColorModeChange: (mode: ColorMode) => void;
   onRetry: () => void;
@@ -39,6 +41,7 @@ export function SettingsModal({
   open,
   onOpenChange,
   currentModel,
+  currentAuxiliaryModel,
   availableModels,
   modelsLoading,
   modelsError,
@@ -46,6 +49,7 @@ export function SettingsModal({
   selectedThemeId,
   colorMode,
   onSelectModel,
+  onSelectAuxiliaryModel,
   onThemeChange,
   onColorModeChange,
   onRetry,
@@ -65,6 +69,8 @@ export function SettingsModal({
         ...themes,
       ];
   const showSavedModelOption = availableModels !== null && !availableModels.includes(currentModel);
+  const showSavedAuxiliaryOption =
+    availableModels !== null && !availableModels.includes(currentAuxiliaryModel);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -77,7 +83,7 @@ export function SettingsModal({
         </DialogHeader>
 
         <section className="space-y-2">
-          <div className="text-xs font-medium text-foreground">Model</div>
+          <div className="text-xs font-medium text-foreground">Main model</div>
           <div className="text-xs text-muted-foreground">
             Current: <span className="font-mono text-foreground">{currentModel}</span>
           </div>
@@ -94,7 +100,7 @@ export function SettingsModal({
           ) : availableModels ? (
             <>
               <Select value={currentModel} onValueChange={onSelectModel}>
-                <SelectTrigger aria-label="Model" className="w-full">
+                <SelectTrigger aria-label="Main model" className="w-full">
                   <SelectValue placeholder="Select a model" />
                 </SelectTrigger>
                 <SelectContent>
@@ -110,6 +116,47 @@ export function SettingsModal({
               </Select>
               <p className="text-xs text-muted-foreground">
                 Changes apply when you start a new chat — your current conversation keeps its model.
+              </p>
+            </>
+          ) : null}
+        </section>
+
+        <section className="space-y-2">
+          <div className="text-xs font-medium text-foreground">Auxiliary model</div>
+          <div className="text-xs text-muted-foreground">
+            Current: <span className="font-mono text-foreground">{currentAuxiliaryModel}</span>
+          </div>
+
+          {modelsLoading ? (
+            <div className="text-xs text-muted-foreground">Loading models…</div>
+          ) : modelsError ? (
+            <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div>{modelsError}</div>
+              <Button type="button" variant="destructive" size="sm" onClick={onRetry}>
+                Retry
+              </Button>
+            </div>
+          ) : availableModels ? (
+            <>
+              <Select value={currentAuxiliaryModel} onValueChange={onSelectAuxiliaryModel}>
+                <SelectTrigger aria-label="Auxiliary model" className="w-full">
+                  <SelectValue placeholder="Select a model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {showSavedAuxiliaryOption ? (
+                    <SelectItem value={currentAuxiliaryModel}>
+                      {currentAuxiliaryModel} (saved)
+                    </SelectItem>
+                  ) : null}
+                  {availableModels.map((m) => (
+                    <SelectItem key={`aux-${m}`} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Used during conversation compaction. Cheaper models save tokens on long sessions.
               </p>
             </>
           ) : null}

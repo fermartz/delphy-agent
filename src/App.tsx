@@ -449,6 +449,14 @@ function App() {
     setTimeout(() => setToast(null), 2500);
   }
 
+  async function handleAuxiliaryModelChange(newModel: string) {
+    if (newModel === settings.auxiliary_model) return;
+    const updated = await saveSettings({ auxiliary_model: newModel });
+    setSettings(updated);
+    setToast(`Auxiliary model updated — ${newModel}.`);
+    setTimeout(() => setToast(null), 2500);
+  }
+
   async function handleColorModeChange(newMode: ColorMode) {
     if (newMode === settings.color_mode) return;
     const updated = await saveSettings({ color_mode: newMode });
@@ -558,6 +566,7 @@ function App() {
         open={settingsOpen}
         onOpenChange={(open) => (open ? openSettings() : closeSettings())}
         currentModel={settings.main_model}
+        currentAuxiliaryModel={settings.auxiliary_model}
         availableModels={availableModels}
         modelsLoading={modelsLoading}
         modelsError={modelsError}
@@ -565,6 +574,7 @@ function App() {
         selectedThemeId={settings.selected_theme}
         colorMode={settings.color_mode}
         onSelectModel={handleModelChange}
+        onSelectAuxiliaryModel={handleAuxiliaryModelChange}
         onThemeChange={handleThemeChange}
         onColorModeChange={handleColorModeChange}
         onRetry={openSettings}

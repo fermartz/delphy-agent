@@ -39,6 +39,7 @@ const fakeThemes: Theme[] = [
 function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModal>> = {}) {
   const onOpenChange = vi.fn();
   const onSelectModel = vi.fn();
+  const onSelectAuxiliaryModel = vi.fn();
   const onThemeChange = vi.fn();
   const onColorModeChange = vi.fn();
   const onRetry = vi.fn();
@@ -47,6 +48,7 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
       open
       onOpenChange={onOpenChange}
       currentModel="claude-sonnet-4-6"
+      currentAuxiliaryModel="claude-haiku-4-5"
       availableModels={["claude-sonnet-4-6", "claude-haiku-4-5"]}
       modelsLoading={false}
       modelsError={null}
@@ -54,23 +56,50 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
       selectedThemeId="perpetuity"
       colorMode="dark"
       onSelectModel={onSelectModel}
+      onSelectAuxiliaryModel={onSelectAuxiliaryModel}
       onThemeChange={onThemeChange}
       onColorModeChange={onColorModeChange}
       onRetry={onRetry}
       {...overrides}
     />,
   );
-  return { onOpenChange, onSelectModel, onThemeChange, onColorModeChange, onRetry };
+  return {
+    onOpenChange,
+    onSelectModel,
+    onSelectAuxiliaryModel,
+    onThemeChange,
+    onColorModeChange,
+    onRetry,
+  };
 }
 
 describe("SettingsModal", () => {
-  it("renders the dialog with title, theme trigger, and color-mode radios", () => {
+  it("renders the dialog with title, theme trigger, main + auxiliary model triggers, and color-mode radios", () => {
     renderModal();
     expect(screen.getByRole("dialog", { name: /settings/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/theme/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/model/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^main model$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^auxiliary model$/i)).toBeInTheDocument();
     // 3 color-mode radios (one per mode)
     expect(screen.getAllByRole("radio")).toHaveLength(3);
+  });
+
+  it("changing the Auxiliary model Select fires onSelectAuxiliaryModel with the new id", async () => {
+    const user = userEvent.setup();
+    const { onSelectAuxiliaryModel } = renderModal();
+
+    const auxTrigger = screen.getByLabelText(/^auxiliary model$/i);
+    await user.click(auxTrigger);
+    // The other available model ("claude-sonnet-4-6") appears as an option in
+    // the auxiliary picker — pick it (different from the default current value
+    // "claude-haiku-4-5" so we exercise the change path). Radix renders only
+    // the active SelectContent's options, so findByRole (singular) is unique.
+    const sonnetOption = await screen.findByRole("option", { name: /claude-sonnet-4-6/i });
+    await user.click(sonnetOption);
+
+    await waitFor(() => {
+      expect(onSelectAuxiliaryModel).toHaveBeenCalledWith("claude-sonnet-4-6");
+    });
   });
 
   it("changing the theme Select fires onThemeChange with the new id", async () => {

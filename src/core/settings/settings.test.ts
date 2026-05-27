@@ -106,16 +106,13 @@ describe("settings module", () => {
     resetMocks({
       main_model: null,
       default_backend: null,
-      // window_state legitimately allows null — should NOT warn for it
-      window_state: null,
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     warnSpy.mockClear();
     const settings = await loadSettings();
     expect(settings.main_model).toBe(DEFAULT_SETTINGS.main_model);
     expect(settings.default_backend).toBe(DEFAULT_SETTINGS.default_backend);
-    expect(settings.window_state).toBeNull();
-    expect(warnSpy).toHaveBeenCalledTimes(2); // main_model + default_backend, NOT window_state
+    expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 
   it("returns defaults when the underlying store fails to load (corrupted file path)", async () => {
