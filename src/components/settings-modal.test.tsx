@@ -56,11 +56,17 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
       selectedThemeId="perpetuity"
       colorMode="dark"
       mcpStatuses={[]}
+      mcpConfigs={[]}
       onSelectModel={onSelectModel}
       onSelectAuxiliaryModel={onSelectAuxiliaryModel}
       onThemeChange={onThemeChange}
       onColorModeChange={onColorModeChange}
       onRetry={onRetry}
+      onMcpAdd={vi.fn()}
+      onMcpEdit={vi.fn()}
+      onMcpRemove={vi.fn()}
+      onMcpRestart={vi.fn()}
+      onMcpToggle={vi.fn()}
       {...overrides}
     />,
   );
@@ -134,6 +140,16 @@ describe("SettingsModal", () => {
         { id: "server-everything", name: "Everything", kind: "connected", toolCount: 13 },
         { id: "broken-one", name: "Broken", kind: "failed", error: "SPAWN_FAILED: nope" },
       ],
+      mcpConfigs: [
+        {
+          id: "server-everything",
+          name: "Everything",
+          enabled: true,
+          transport: "stdio",
+          command: "npx",
+        },
+        { id: "broken-one", name: "Broken", enabled: true, transport: "stdio", command: "bad" },
+      ],
     });
     expect(screen.getByText("server-everything")).toBeInTheDocument();
     expect(screen.getByText("connected")).toBeInTheDocument();
@@ -141,6 +157,121 @@ describe("SettingsModal", () => {
     expect(screen.getByText("broken-one")).toBeInTheDocument();
     expect(screen.getByText("failed")).toBeInTheDocument();
     expect(screen.getByText(/SPAWN_FAILED: nope/)).toBeInTheDocument();
+  });
+
+  it("Add server button opens the form", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByText("Add server"));
+    expect(screen.getByText("Add MCP server")).toBeInTheDocument();
+    expect(screen.getByLabelText(/id/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/command/i)).toBeInTheDocument();
+  });
+
+  it("form validates required fields and shows errors", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByText("Add server"));
+    await user.click(screen.getByText("Add"));
+    expect(screen.getByText(/id must be/i)).toBeInTheDocument();
+    expect(screen.getByText(/name is required/i)).toBeInTheDocument();
+    expect(screen.getByText(/command is required/i)).toBeInTheDocument();
+  });
+
+  it("form rejects inline API keys in env", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByText("Add server"));
+    await user.type(screen.getByLabelText(/^id/i), "test");
+    await user.type(screen.getByLabelText(/name/i), "Test");
+    await user.type(screen.getByLabelText(/command/i), "echo");
+    await user.type(screen.getByLabelText(/environment/i), "KEY=sk-ant-abc123");
+    await user.click(screen.getByText("Add"));
+    expect(screen.getByText(/inline api keys are not allowed/i)).toBeInTheDocument();
+  });
+
+  it("form calls onMcpAdd with valid config", async () => {
+    const user = userEvent.setup();
+    const onMcpAdd = vi.fn();
+    renderModal({ onMcpAdd });
+    await user.click(screen.getByText("Add server"));
+    await user.type(screen.getByLabelText(/^id/i), "my-server");
+    await user.type(screen.getByLabelText(/name/i), "My Server");
+    await user.type(screen.getByLabelText(/command/i), "node");
+    await user.type(screen.getByLabelText(/args/i), "server.js --port 3000");
+    await user.click(screen.getByText("Add"));
+    expect(onMcpAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "my-server",
+        name: "My Server",
+        command: "node",
+        args: ["server.js", "--port", "3000"],
+        transport: "stdio",
+        enabled: true,
+      }),
+    );
+  });
+
+  it("edit button opens pre-filled form for stdio servers", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      mcpStatuses: [{ id: "test-server", name: "Test", kind: "connected", toolCount: 2 }],
+      mcpConfigs: [
+        {
+          id: "test-server",
+          name: "Test",
+          enabled: true,
+          transport: "stdio",
+          command: "echo",
+          args: ["hi"],
+        },
+      ],
+    });
+    await user.click(screen.getByTitle("Edit"));
+    expect(screen.getByText("Edit server")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^id/i)).toHaveValue("test-server");
+    expect(screen.getByLabelText(/command/i)).toHaveValue("echo");
+  });
+
+  it("remove button shows confirmation", async () => {
+    const user = userEvent.setup();
+    const onMcpRemove = vi.fn();
+    renderModal({
+      mcpStatuses: [{ id: "test-server", name: "Test", kind: "connected", toolCount: 2 }],
+      mcpConfigs: [
+        { id: "test-server", name: "Test", enabled: true, transport: "stdio", command: "echo" },
+      ],
+      onMcpRemove,
+    });
+    await user.click(screen.getByTitle("Remove"));
+    expect(screen.getByText(/remove "test-server"/i)).toBeInTheDocument();
+    await user.click(screen.getByText("Confirm"));
+    expect(onMcpRemove).toHaveBeenCalledWith("test-server");
+  });
+
+  it("non-stdio servers show remove only, no edit or restart", () => {
+    renderModal({
+      mcpStatuses: [
+        {
+          id: "http-server",
+          name: "HTTP",
+          kind: "failed",
+          error: 'Transport "http" is not yet supported',
+        },
+      ],
+      mcpConfigs: [
+        {
+          id: "http-server",
+          name: "HTTP",
+          enabled: true,
+          transport: "http",
+          url: "https://example.com",
+        },
+      ],
+    });
+    expect(screen.getByTitle("Remove")).toBeInTheDocument();
+    expect(screen.queryByTitle("Edit")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Restart")).not.toBeInTheDocument();
   });
 
   it("shows '(unavailable)' for a selected theme that's no longer in the registry", async () => {

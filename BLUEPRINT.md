@@ -15,8 +15,8 @@
   Plans live in `.hermes/plans/`. Reviews live in `.hermes/reviews/` (only written when verdict is REQUEST_CHANGES).
 
   ### File naming (MUST follow)
-  - Plans: `YYYY-MM-DD_HHMMSS-descriptive-name.md`
-  - Reviews: `YYYY-MM-DD-descriptive-name.md`
+  - Plans: `YYYY-MM-DD_feature-name.md` (revisions: `_r1`, `_r2`, etc.)
+  - Reviews: `YYYY-MM-DD_feature-name.md` (same convention as plans)
 
   ## Before Implementing
 

@@ -197,7 +197,7 @@ MCP is the unified plugin format across all backends. A single configured MCP se
 
 ### Plugin config
 
-MCP server configs live in SQLite (table `mcp_servers`, see Storage). Each entry:
+MCP server configs are persisted via `tauri-plugin-store` under the `mcp_servers` key in `settings.json` (interim implementation until BACKLOG #4 ships SQLite — see `docs/DECISIONS.md` 2026-05-28 entry). The store layer (`src/core/mcp/store.ts`) handles Zod validation, default seeding, and CRUD; the migration to SQLite will be a module swap. Each entry:
 
 ```typescript
 interface McpServerConfig {
@@ -235,7 +235,7 @@ Responsibilities (shipped):
 
 The TS MCP client uses a custom `Transport` implementation (`src/core/mcp/tauri-transport.ts`) that wraps these Tauri commands and events to satisfy the SDK's `Transport` interface, so the rest of the SDK is unaware. The `McpManager` singleton in `src/core/mcp/manager.ts` owns the lifetime of configured servers: spawn at app boot, connect a `Client` over `TauriTransport`, call `client.connect(transport)` (which auto-runs the MCP initialize handshake), call `client.listTools()`, and surface the result. Per-server failures are captured and reported in the Settings modal's read-only "MCP servers" section without blocking chat. `init()` is idempotent across concurrent + repeat callers via a shared in-flight promise — important for React Strict Mode.
 
-Slice B (shipped 2026-05-28) wires `mcpManager.getAllTools()` into `streamText({ tools })` via a `buildToolSet()` helper that maps each MCP tool to an AI SDK `tool({ needsApproval: true, execute: ... })`. The approval flow is a per-turn multi-streamText loop: when `finishReason === "tool-calls"` with pending approvals, the session awaits user verdicts, appends `ToolApprovalResponse[]` to the messages array, and calls `streamText` again. `mcpManager.callTool(namespacedName, args)` executes approved tool calls with a 30-second timeout. `APPROVAL_CYCLE_CAP = 5` limits chained tool calls per user turn. See `docs/DECISIONS.md` 2026-05-28 entry for the full design + alternatives considered. Slice C will add config persistence (currently hardcoded in `src/core/mcp/configs.ts`) + add/remove UI + secret-reference resolution + a restart-server action.
+Slice B (shipped 2026-05-28) wires `mcpManager.getAllTools()` into `streamText({ tools })` via a `buildToolSet()` helper that maps each MCP tool to an AI SDK `tool({ needsApproval: true, execute: ... })`. The approval flow is a per-turn multi-streamText loop: when `finishReason === "tool-calls"` with pending approvals, the session awaits user verdicts, appends `ToolApprovalResponse[]` to the messages array, and calls `streamText` again. `mcpManager.callTool(namespacedName, args)` executes approved tool calls with a 30-second timeout. `APPROVAL_CYCLE_CAP = 5` limits chained tool calls per user turn. See `docs/DECISIONS.md` 2026-05-28 entry for the full design + alternatives considered. Slice C (shipped 2026-05-28) replaced the hardcoded `configs.ts` with user-managed config persistence via `tauri-plugin-store` + a full CRUD UI in Settings (add/edit/remove/restart/toggle) + `${secret:key}` resolution against the OS keychain at boot time + inline API key rejection at save time. Non-stdio transports are preserved in the store but shown as unsupported; see BACKLOG #9 for HTTP/SSE.
 
 ---
 

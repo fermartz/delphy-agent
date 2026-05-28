@@ -1,6 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { invoke } from "@tauri-apps/api/core";
-import { BUILTIN_MCP_CONFIGS } from "./configs";
 import { TauriTransport } from "./tauri-transport";
 import type { McpServerConfig, McpServerStatus, McpTool, McpToolResult } from "./types";
 
@@ -27,33 +26,41 @@ type ServerEntry =
   | { kind: "failed"; data: FailedServer }
   | { kind: "disabled"; data: DisabledServer };
 
-/**
- * Singleton manager for all configured MCP servers. Initialized once at app
- * boot via `mcpManager.init()`. The chat path consumes `getAllTools()` (slice
- * B); the Settings modal consumes `getStatus()` (slice A).
- *
- * Slice A loads configs from `BUILTIN_MCP_CONFIGS` (one hardcoded entry).
- * Slice C swaps that for `tauri-plugin-store`-backed loading + add/remove UI.
- */
+const SECRET_REF_PATTERN = /\$\{secret:([^}]+)\}/g;
+
 class McpManager {
   private servers = new Map<string, ServerEntry>();
   private initPromise: Promise<void> | null = null;
   private initDone = false;
 
-  /**
-   * Idempotent across concurrent + repeat callers. Subsequent calls return
-   * the SAME in-flight promise — important for React Strict Mode, where the
-   * boot effect fires twice and both invocations must observe the real
-   * completion (not the second one resolving instantly because the first
-   * already kicked things off).
-   */
-  async init(configs: McpServerConfig[] = BUILTIN_MCP_CONFIGS): Promise<void> {
+  async init(configs: McpServerConfig[]): Promise<void> {
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
       await Promise.all(configs.map((config) => this.bootOne(config)));
       this.initDone = true;
     })();
     return this.initPromise;
+  }
+
+  async addServer(config: McpServerConfig): Promise<void> {
+    await this.bootOne(config);
+  }
+
+  async removeServer(id: string): Promise<void> {
+    const entry = this.servers.get(id);
+    if (entry?.kind === "connected") {
+      try {
+        await invoke("stop_mcp_server", { handle: id });
+      } catch {
+        // ignore
+      }
+    }
+    this.servers.delete(id);
+  }
+
+  async restartServer(config: McpServerConfig): Promise<void> {
+    await this.removeServer(config.id);
+    await this.bootOne(config);
   }
 
   isInitialized(): boolean {
@@ -142,8 +149,17 @@ class McpManager {
       return;
     }
 
+    if (config.transport !== "stdio") {
+      this.servers.set(config.id, {
+        kind: "failed",
+        data: { config, error: `Transport "${config.transport}" is not yet supported` },
+      });
+      return;
+    }
+
     try {
-      const handle = await this.spawnWithTimeout(config);
+      const resolved = await this.resolveSecrets(config);
+      const handle = await this.spawnWithTimeout(resolved);
       const transport = new TauriTransport(handle);
       const client = new Client({ name: "delphy-agent", version: "0.0.0" }, { capabilities: {} });
 
@@ -167,13 +183,36 @@ class McpManager {
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       this.servers.set(config.id, { kind: "failed", data: { config, error } });
-      // Best-effort cleanup if the child actually started before failure.
       try {
         await invoke("stop_mcp_server", { handle: config.id });
       } catch {
-        // ignore — child may not exist
+        // ignore
       }
     }
+  }
+
+  private async resolveSecrets(config: McpServerConfig): Promise<McpServerConfig> {
+    if (!config.env) return config;
+    const resolved: Record<string, string> = {};
+    for (const [key, value] of Object.entries(config.env)) {
+      resolved[key] = await this.resolveSecretRefs(value);
+    }
+    return { ...config, env: resolved };
+  }
+
+  private async resolveSecretRefs(value: string): Promise<string> {
+    const matches = [...value.matchAll(SECRET_REF_PATTERN)];
+    if (matches.length === 0) return value;
+    let result = value;
+    for (const match of matches) {
+      const secretKey = match[1];
+      const secret = await invoke<string | null>("get_secret", { key: secretKey });
+      if (secret === null) {
+        throw new Error(`Secret "${secretKey}" not found in keychain — set it in Settings`);
+      }
+      result = result.replace(match[0], secret);
+    }
+    return result;
   }
 
   private async spawnWithTimeout(config: McpServerConfig): Promise<string> {

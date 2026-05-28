@@ -1,16 +1,21 @@
 /**
- * Slice A's subset of the MCP server config shape from `docs/SPEC.md` §
- * "MCP server configuration." HTTP/SSE transports + secret-reference
- * `${secret:...}` syntax + the optional `scopes` array all land later.
+ * Full MCP server config shape per `docs/SPEC.md` § "MCP server configuration."
+ * Slice C persists these via tauri-plugin-store. The manager only boots stdio
+ * configs; non-stdio entries are preserved but shown as unsupported.
  */
+export type McpTransport = "stdio" | "http" | "sse";
+
 export interface McpServerConfig {
   id: string;
   name: string;
   enabled: boolean;
-  transport: "stdio";
-  command: string;
+  transport: McpTransport;
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  scopes?: string[];
 }
 
 export type McpServerStatusKind = "connecting" | "connected" | "failed" | "disabled";

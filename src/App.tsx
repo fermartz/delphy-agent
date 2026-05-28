@@ -12,9 +12,9 @@ import { Button } from "@/components/ui/button";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { type CommandContext, dispatchInput } from "./core/commands";
-import { BUILTIN_MCP_CONFIGS } from "./core/mcp/configs";
 import { mcpManager } from "./core/mcp/manager";
-import type { McpServerStatus } from "./core/mcp/types";
+import { loadMcpConfigs, saveMcpConfigs } from "./core/mcp/store";
+import type { McpServerConfig, McpServerStatus } from "./core/mcp/types";
 import { anthropicProfile } from "./core/providers/anthropic";
 import {
   clearRuntimeKey,
@@ -116,6 +116,7 @@ function App() {
   // currently-active theme's JSON in place).
   const [themesVersion, setThemesVersion] = useState(0);
   const [mcpStatuses, setMcpStatuses] = useState<McpServerStatus[]>([]);
+  const [mcpConfigs, setMcpConfigs] = useState<McpServerConfig[]>([]);
   const sessionRef = useRef<Session | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
@@ -243,17 +244,23 @@ function App() {
   // immediately so users see progress while npx warms up on first run.
   useEffect(() => {
     let active = true;
-    setMcpStatuses(
-      BUILTIN_MCP_CONFIGS.map((c) => ({
-        id: c.id,
-        name: c.name,
-        kind: c.enabled ? ("connecting" as const) : ("disabled" as const),
-      })),
-    );
-    void mcpManager.init().then(() => {
-      if (!active) return;
-      setMcpStatuses(mcpManager.getStatus());
-    });
+    void loadMcpConfigs()
+      .then((configs) => {
+        if (!active) return;
+        setMcpConfigs(configs);
+        setMcpStatuses(
+          configs.map((c) => ({
+            id: c.id,
+            name: c.name,
+            kind: c.enabled ? ("connecting" as const) : ("disabled" as const),
+          })),
+        );
+        return mcpManager.init(configs);
+      })
+      .then(() => {
+        if (!active) return;
+        setMcpStatuses(mcpManager.getStatus());
+      });
     return () => {
       active = false;
     };
@@ -490,6 +497,51 @@ function App() {
     setSettings(updated);
   }
 
+  async function handleMcpAdd(config: McpServerConfig) {
+    const updated = [...mcpConfigs, config];
+    setMcpConfigs(updated);
+    await saveMcpConfigs(updated);
+    await mcpManager.addServer(config);
+    setMcpStatuses(mcpManager.getStatus());
+  }
+
+  async function handleMcpEdit(config: McpServerConfig) {
+    const updated = mcpConfigs.map((c) => (c.id === config.id ? config : c));
+    setMcpConfigs(updated);
+    await saveMcpConfigs(updated);
+    await mcpManager.restartServer(config);
+    setMcpStatuses(mcpManager.getStatus());
+  }
+
+  async function handleMcpRemove(id: string) {
+    const updated = mcpConfigs.filter((c) => c.id !== id);
+    setMcpConfigs(updated);
+    await saveMcpConfigs(updated);
+    await mcpManager.removeServer(id);
+    setMcpStatuses(mcpManager.getStatus());
+  }
+
+  async function handleMcpRestart(id: string) {
+    const config = mcpConfigs.find((c) => c.id === id);
+    if (!config) return;
+    await mcpManager.restartServer(config);
+    setMcpStatuses(mcpManager.getStatus());
+  }
+
+  async function handleMcpToggle(id: string, enabled: boolean) {
+    const updated = mcpConfigs.map((c) => (c.id === id ? { ...c, enabled } : c));
+    setMcpConfigs(updated);
+    await saveMcpConfigs(updated);
+    const config = updated.find((c) => c.id === id);
+    if (!config) return;
+    if (enabled) {
+      await mcpManager.addServer(config);
+    } else {
+      await mcpManager.removeServer(id);
+    }
+    setMcpStatuses(mcpManager.getStatus());
+  }
+
   const backendLabel =
     backend === "anthropic-api"
       ? "Anthropic (Claude)"
@@ -606,11 +658,17 @@ function App() {
         selectedThemeId={settings.selected_theme}
         colorMode={settings.color_mode}
         mcpStatuses={mcpStatuses}
+        mcpConfigs={mcpConfigs}
         onSelectModel={handleModelChange}
         onSelectAuxiliaryModel={handleAuxiliaryModelChange}
         onThemeChange={handleThemeChange}
         onColorModeChange={handleColorModeChange}
         onRetry={openSettings}
+        onMcpAdd={handleMcpAdd}
+        onMcpEdit={handleMcpEdit}
+        onMcpRemove={handleMcpRemove}
+        onMcpRestart={handleMcpRestart}
+        onMcpToggle={handleMcpToggle}
       />
 
       {toast ? (
