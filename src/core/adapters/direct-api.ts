@@ -178,6 +178,19 @@ function buildToolSet(): ToolSet | undefined {
   return toolSet;
 }
 
+function buildToolContext(): string {
+  const allTools = mcpManager.getAllTools();
+  if (allTools.length === 0) return "";
+  const byServer = new Map<string, string[]>();
+  for (const t of allTools) {
+    const names = byServer.get(t.serverId) ?? [];
+    names.push(t.name);
+    byServer.set(t.serverId, names);
+  }
+  const lines = Array.from(byServer.entries()).map(([id, names]) => `- ${id}: ${names.join(", ")}`);
+  return `Connected MCP servers and their tools:\n${lines.join("\n")}`;
+}
+
 class DirectApiSession implements Session {
   readonly id: string;
 
@@ -343,12 +356,16 @@ class DirectApiSession implements Session {
   ): Promise<IterationOutcome> {
     const model = profile.model(this.apiKey, this.modelId);
     const tools = buildToolSet();
+    const toolContext = buildToolContext();
+    const systemContent = toolContext
+      ? `${this.systemPrompt}\n\n${toolContext}`
+      : this.systemPrompt;
     const result = streamText({
       model,
       system: [
         {
           role: "system",
-          content: this.systemPrompt,
+          content: systemContent,
           providerOptions: {
             anthropic: { cacheControl: { type: "ephemeral" } },
           },

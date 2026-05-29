@@ -114,12 +114,12 @@ Location: platform-native app-data directory via Tauri's `app_data_dir()` resolu
   "auxiliary_model": "claude-haiku-4-5",
   "mcp_servers": [
     {
-      "id": "server-everything",
-      "name": "Everything (reference)",
+      "id": "fetch",
+      "name": "Fetch",
       "enabled": true,
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-everything"]
+      "args": ["-y", "mcp-fetch-server"]
     }
   ]
 }

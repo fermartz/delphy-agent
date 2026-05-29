@@ -25,12 +25,12 @@ const McpServerConfigArraySchema = z.array(McpServerConfigSchema);
 
 const DEFAULT_CONFIGS: McpServerConfig[] = [
   {
-    id: "server-everything",
-    name: "Everything (reference)",
+    id: "fetch",
+    name: "Fetch",
     enabled: true,
     transport: "stdio",
     command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-everything"],
+    args: ["-y", "mcp-fetch-server"],
   },
 ];
 

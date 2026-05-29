@@ -49,7 +49,7 @@ type ChatItem =
       verdict?: "allowed" | "denied";
     }
   | { kind: "tool-call"; id: string; name: string; input: unknown }
-  | { kind: "tool-result"; id: string; output: unknown; isError?: boolean }
+  | { kind: "tool-result"; id: string; name: string; output: unknown; isError?: boolean }
   | { kind: "runtime-error"; id: string; errorKind: RuntimeErrorKind; message: string }
   | { kind: "system"; id: string; text: string; intent?: "info" | "error" };
 
@@ -182,15 +182,29 @@ function App() {
             break;
 
           case "tool_result":
-            setItems((prev) => [
-              ...finalizeInFlight(prev, "complete"),
-              {
+            setItems((prev) => {
+              const updated = finalizeInFlight(prev, "complete");
+              const callIdx = updated.findIndex(
+                (it) => it.kind === "tool-call" && it.id === event.id,
+              );
+              const toolName =
+                callIdx !== -1 && updated[callIdx].kind === "tool-call"
+                  ? updated[callIdx].name
+                  : "tool";
+              const resultItem: ChatItem = {
                 kind: "tool-result",
                 id: event.id,
+                name: toolName,
                 output: event.output,
                 isError: event.isError,
-              },
-            ]);
+              };
+              if (callIdx !== -1) {
+                const next = [...updated];
+                next[callIdx] = resultItem;
+                return next;
+              }
+              return [...updated, resultItem];
+            });
             break;
 
           case "done":
@@ -699,9 +713,9 @@ function BootBanner({
 }) {
   if (errorKind === "unknown") {
     return (
-      <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+      <div className="border-b border-border bg-muted px-4 py-3 text-sm text-foreground">
         <div className="font-medium">Backend failed to start.</div>
-        <div className="mt-1 text-xs text-red-800">{errorMessage}</div>
+        <div className="mt-1 text-xs text-muted-foreground">{errorMessage}</div>
         <Button type="button" variant="destructive" size="sm" onClick={onRetry} className="mt-2">
           Try again
         </Button>
@@ -712,13 +726,13 @@ function BootBanner({
   const isLinuxFallback = errorKind === "secure-storage-unavailable";
 
   return (
-    <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div className="border-b border-border bg-muted px-4 py-3 text-sm text-foreground">
       <div className="font-medium">
         {isLinuxFallback
           ? "Secure storage unavailable — session-only key required"
           : "Anthropic API key needed"}
       </div>
-      <div className="mt-1 text-xs text-amber-800">
+      <div className="mt-1 text-xs text-muted-foreground">
         {isLinuxFallback ? (
           <>
             No Secret Service daemon (GNOME Keyring / KWallet) is running on this Linux system. The
@@ -756,14 +770,9 @@ function BootBanner({
           onChange={(e) => setKeyInput(e.currentTarget.value)}
           placeholder="sk-ant-..."
           disabled={saving}
-          className="flex-1 rounded border border-amber-300 bg-white px-3 py-1 text-xs text-neutral-900 focus:border-amber-500 focus:outline-none disabled:opacity-50"
+          className="flex-1 rounded border border-border bg-background px-3 py-1 text-xs text-foreground focus:border-primary focus:outline-none disabled:opacity-50"
         />
-        <Button
-          type="submit"
-          size="sm"
-          disabled={saving || keyInput.trim().length === 0}
-          className="bg-amber-600 text-white hover:bg-amber-700"
-        >
+        <Button type="submit" size="sm" disabled={saving || keyInput.trim().length === 0}>
           {saving ? "Saving..." : isLinuxFallback ? "Use for session" : "Save"}
         </Button>
       </form>
@@ -785,29 +794,24 @@ function renderItem(
       );
     case "assistant-text":
       return (
-        <div className={`text-sm ${it.status === "error" ? "text-red-600" : ""}`}>
+        <div className={`text-sm ${it.status === "error" ? "text-destructive" : ""}`}>
           <MarkdownText>{it.text}</MarkdownText>
         </div>
       );
     case "approval":
       return (
-        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm">
-          <div className="font-medium text-amber-900">
+        <div className="rounded border border-border bg-muted px-3 py-2 text-sm">
+          <div className="font-medium text-foreground">
             {it.verdict
               ? `Approval ${it.verdict} — ${it.action}`
               : `Agent wants to use ${it.action}`}
           </div>
-          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-amber-800">
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-muted-foreground">
             {previewPayload(it.payload)}
           </pre>
           {!it.verdict ? (
             <div className="mt-2 flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => onApproval(it.id, true)}
-                className="bg-amber-600 text-white hover:bg-amber-700"
-              >
+              <Button type="button" size="sm" onClick={() => onApproval(it.id, true)}>
                 Approve
               </Button>
               <Button
@@ -815,7 +819,6 @@ function renderItem(
                 variant="outline"
                 size="sm"
                 onClick={() => onApproval(it.id, false)}
-                className="border-amber-400 text-amber-900 hover:bg-amber-100"
               >
                 Deny
               </Button>
@@ -830,20 +833,19 @@ function renderItem(
         </div>
       );
     case "tool-result":
-      return (
-        <pre
-          className={`font-mono text-sm whitespace-pre-wrap ${
-            it.isError ? "text-red-600" : "text-foreground"
-          }`}
-        >
-          {previewPayload(it.output)}
-        </pre>
-      );
+      if (it.isError) {
+        return (
+          <pre className="font-mono text-sm whitespace-pre-wrap text-destructive">
+            {it.name} failed: {previewPayload(it.output)}
+          </pre>
+        );
+      }
+      return <div className="font-mono text-sm text-muted-foreground">{it.name} completed</div>;
     case "runtime-error":
       return (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
-          <div className="font-medium text-red-900">{runtimeErrorTitle(it.errorKind)}</div>
-          <div className="mt-1 text-red-800">{it.message}</div>
+        <div className="rounded border border-border bg-muted px-3 py-2 text-sm">
+          <div className="font-medium text-foreground">{runtimeErrorTitle(it.errorKind)}</div>
+          <div className="mt-1 text-muted-foreground">{it.message}</div>
           {it.errorKind === "invalid-key" ? (
             <Button
               type="button"
