@@ -8,10 +8,11 @@ function renderIcon(item: ChatIconInput) {
 }
 
 describe("ChatIcon", () => {
-  it("user-text renders an empty spacer (no icon)", () => {
+  it("user-text renders UserAvatar (svg with fill-primary classes)", () => {
     const c = renderIcon({ kind: "user-text" });
-    // No svg in the user-text branch — just an aria-hidden spacer span.
-    expect(c.querySelector("svg")).toBeNull();
+    const svg = c.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute("aria-label")).toBe("User");
   });
 
   it("assistant-text renders AgentAvatar (svg with fill-primary classes)", () => {
