@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { ReactElement } from "react";
 import { AgentAvatar } from "@/components/agent-avatar";
+import { UserAvatar } from "@/components/user-avatar";
 
 /**
  * Minimal shape `ChatIcon` needs. We don't import the full `ChatItem` union
@@ -43,10 +44,9 @@ export function ChatIcon({ item }: { item: ChatIconInput }): ReactElement {
   const wrap = (child: ReactElement): ReactElement => (
     <span className="flex w-8 shrink-0 items-start justify-center pt-0.5">{child}</span>
   );
-  const spacer = <span aria-hidden="true" className="block h-5 w-5" />;
   switch (item.kind) {
     case "user-text":
-      return wrap(spacer);
+      return wrap(<UserAvatar size={32} />);
     case "assistant-text":
       return wrap(<AgentAvatar size={32} />);
     case "system":
