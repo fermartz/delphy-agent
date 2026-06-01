@@ -1,7 +1,8 @@
 /**
  * Full MCP server config shape per `docs/SPEC.md` § "MCP server configuration."
- * Slice C persists these via tauri-plugin-store. The manager only boots stdio
- * configs; non-stdio entries are preserved but shown as unsupported.
+ * Persisted in the SQLite `mcp_servers` table since BACKLOG #4 (2026-05-30);
+ * see `src/core/db/mcp.ts` + `src/core/mcp/store.ts`. The manager only boots
+ * stdio configs; non-stdio entries are preserved but shown as unsupported.
  */
 export type McpTransport = "stdio" | "http" | "sse";
 

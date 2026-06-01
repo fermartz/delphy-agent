@@ -40,6 +40,14 @@ vi.mock("../mcp/manager", () => ({
   },
 }));
 
+const mockSaveMemory = vi.fn();
+vi.mock("../db/memory", () => ({
+  saveMemory: (...args: unknown[]) => mockSaveMemory(...args),
+  loadMemory: vi.fn().mockResolvedValue(""),
+  GLOBAL_MEMORY_ID: "global",
+  MEMORY_MAX_CHARS: 3000,
+}));
+
 import { invoke } from "@tauri-apps/api/core";
 import { generateText, streamText } from "ai";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
@@ -106,6 +114,8 @@ beforeEach(() => {
   mockedCompactMessages.mockReset();
   mockGetAllTools.mockReset();
   mockCallTool.mockReset();
+  mockSaveMemory.mockReset();
+  mockSaveMemory.mockResolvedValue({ saved: "", truncated: false });
   mockedCompactMessages.mockResolvedValue({
     unchanged: true,
     compactedMessages: [],
@@ -648,7 +658,7 @@ describe("directApiAdapter — tool wiring + approval flow", () => {
     await session.close();
   });
 
-  it("tool-less chat: no tools arg when getAllTools returns empty", async () => {
+  it("tool-less chat: only the built-in update_memory tool when getAllTools returns empty", async () => {
     mockGetAllTools.mockReturnValue([]);
     mockedStreamText.mockReturnValueOnce(
       fakeStreamResult([{ type: "text-delta", text: "No tools here." }]),
@@ -661,7 +671,7 @@ describe("directApiAdapter — tool wiring + approval flow", () => {
 
     expect(events.some((e) => e.type === "text")).toBe(true);
     const callArgs = mockedStreamText.mock.calls[0]?.[0] as Any;
-    expect(callArgs.tools).toBeUndefined();
+    expect(Object.keys(callArgs.tools)).toEqual(["update_memory"]);
     await session.close();
   });
 
@@ -995,6 +1005,93 @@ describe("directApiAdapter — tool wiring + approval flow", () => {
     expect(doneEvents).toHaveLength(1);
     expect(doneEvents[0].type === "done" && doneEvents[0].reason).toBe("interrupted");
 
+    await session.close();
+  });
+});
+
+describe("directApiAdapter — built-in update_memory tool", () => {
+  async function startSession(): Promise<Session> {
+    mockedInvoke.mockResolvedValueOnce("sk-ant-test");
+    return directApiAdapter.start({});
+  }
+
+  function captureToolSet(): Record<string, Any> {
+    const call = mockedStreamText.mock.calls[0]?.[0] as { tools?: Record<string, Any> } | undefined;
+    if (!call?.tools) throw new Error("no tools registered on streamText call");
+    return call.tools;
+  }
+
+  it("registers update_memory even when no MCP tools are connected", async () => {
+    mockGetAllTools.mockReturnValue([]);
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    const session = await startSession();
+    await session.sendMessage("hi");
+    const tools = captureToolSet();
+    expect(tools.update_memory).toBeDefined();
+    await session.close();
+  });
+
+  it("update_memory tool has needsApproval: false (runs inline without approval card)", async () => {
+    mockGetAllTools.mockReturnValue([]);
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    const session = await startSession();
+    await session.sendMessage("hi");
+    const tools = captureToolSet();
+    expect(tools.update_memory.needsApproval).toBe(false);
+    await session.close();
+  });
+
+  it("update_memory.execute writes through saveMemory and returns success content", async () => {
+    mockGetAllTools.mockReturnValue([]);
+    mockSaveMemory.mockResolvedValueOnce({ saved: "hello world", truncated: false });
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    const session = await startSession();
+    await session.sendMessage("hi");
+    const tools = captureToolSet();
+    const result = await tools.update_memory.execute({ content: "hello world" });
+    expect(mockSaveMemory).toHaveBeenCalledWith("hello world");
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toContain("11 chars");
+    expect(result.content[0].text).toContain("next session");
+    await session.close();
+  });
+
+  it("update_memory.execute signals truncation when saveMemory reports it", async () => {
+    mockGetAllTools.mockReturnValue([]);
+    mockSaveMemory.mockResolvedValueOnce({ saved: "x".repeat(3000), truncated: true });
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    const session = await startSession();
+    await session.sendMessage("hi");
+    const tools = captureToolSet();
+    const result = await tools.update_memory.execute({ content: "x".repeat(5000) });
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toContain("truncated");
+  });
+
+  it("update_memory.execute returns isError when saveMemory throws", async () => {
+    mockGetAllTools.mockReturnValue([]);
+    mockSaveMemory.mockRejectedValueOnce(new Error("db locked"));
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    const session = await startSession();
+    await session.sendMessage("hi");
+    const tools = captureToolSet();
+    const result = await tools.update_memory.execute({ content: "x" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("db locked");
+  });
+
+  it("initialMemory is injected into the system prompt context slot", async () => {
+    mockedInvoke.mockResolvedValueOnce("sk-ant-test");
+    mockGetAllTools.mockReturnValue([]);
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    const session = await directApiAdapter.start({
+      initialMemory: "User likes concise answers.",
+    });
+    await session.sendMessage("hi");
+    const call = mockedStreamText.mock.calls[0]?.[0] as { system?: unknown };
+    const sys = call?.system as Array<{ content: string }> | undefined;
+    expect(sys?.[0].content).toContain("User memory");
+    expect(sys?.[0].content).toContain("User likes concise answers");
     await session.close();
   });
 });

@@ -1,14 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestDb, type MockDb } from "../db/db-mock";
+import { setDbForTests } from "../db/init";
 
-let mockStoreData: Record<string, unknown> = {};
+let mockLegacyStoreData: Record<string, unknown> = {};
 const saveMock = vi.fn();
 
 vi.mock("@tauri-apps/plugin-store", () => ({
   load: vi.fn(() =>
     Promise.resolve({
-      get: vi.fn((key: string) => Promise.resolve(mockStoreData[key])),
+      get: vi.fn((key: string) => Promise.resolve(mockLegacyStoreData[key])),
       set: vi.fn((key: string, value: unknown) => {
-        mockStoreData[key] = value;
+        mockLegacyStoreData[key] = value;
         return Promise.resolve();
       }),
       save: saveMock,
@@ -24,74 +26,153 @@ import {
   validateMcpConfig,
 } from "./store";
 
+let db: MockDb;
+
 beforeEach(() => {
-  mockStoreData = {};
+  mockLegacyStoreData = {};
   saveMock.mockReset();
   resetStoreForTests();
+  db = createTestDb();
+  setDbForTests(db);
+});
+
+afterEach(() => {
+  setDbForTests(null);
 });
 
 describe("loadMcpConfigs", () => {
-  it("seeds defaults when key is absent", async () => {
+  it("seeds defaults when SQLite is empty and no legacy store exists", async () => {
     const configs = await loadMcpConfigs();
     expect(configs).toEqual(DEFAULT_CONFIGS);
-    expect(mockStoreData.mcp_servers).toEqual(DEFAULT_CONFIGS);
-    expect(saveMock).toHaveBeenCalled();
   });
 
-  it("returns persisted configs when valid", async () => {
+  it("returns persisted SQLite configs without re-seeding", async () => {
     const custom = [
       {
         id: "my-server",
         name: "My Server",
         enabled: true,
-        transport: "stdio",
+        transport: "stdio" as const,
         command: "node",
         args: ["server.js"],
       },
     ];
-    mockStoreData.mcp_servers = custom;
+    await saveMcpConfigs(custom);
+    resetStoreForTests();
     const configs = await loadMcpConfigs();
     expect(configs).toEqual(custom);
   });
 
-  it("resets to defaults when persisted data is invalid", async () => {
-    mockStoreData.mcp_servers = [{ id: 123, bad: true }];
-    const configs = await loadMcpConfigs();
-    expect(configs).toEqual(DEFAULT_CONFIGS);
-  });
-
-  it("preserves non-stdio configs", async () => {
+  it("preserves non-stdio configs through round-trip", async () => {
     const mixed = [
-      { id: "stdio-one", name: "Stdio", enabled: true, transport: "stdio", command: "echo" },
+      {
+        id: "stdio-one",
+        name: "Stdio",
+        enabled: true,
+        transport: "stdio" as const,
+        command: "echo",
+      },
       {
         id: "http-one",
         name: "HTTP",
         enabled: true,
-        transport: "http",
+        transport: "http" as const,
         url: "https://example.com",
       },
     ];
-    mockStoreData.mcp_servers = mixed;
+    await saveMcpConfigs(mixed);
+    resetStoreForTests();
     const configs = await loadMcpConfigs();
     expect(configs).toHaveLength(2);
-    expect(configs[1].transport).toBe("http");
+    expect(configs.find((c) => c.id === "http-one")?.transport).toBe("http");
+    expect(configs.find((c) => c.id === "http-one")?.url).toBe("https://example.com");
   });
 
-  it("seeds defaults when key is null", async () => {
-    mockStoreData.mcp_servers = null;
+  it("migrates from legacy tauri-plugin-store on first load when SQLite is empty", async () => {
+    mockLegacyStoreData.mcp_servers = [
+      {
+        id: "legacy",
+        name: "Legacy",
+        enabled: true,
+        transport: "stdio",
+        command: "node",
+        args: ["legacy.js"],
+      },
+    ];
+    const configs = await loadMcpConfigs();
+    expect(configs).toHaveLength(1);
+    expect(configs[0].id).toBe("legacy");
+    expect(mockLegacyStoreData._mcp_migrated).toBe(true);
+  });
+
+  it("skips legacy migration when SQLite already has rows", async () => {
+    await saveMcpConfigs([
+      {
+        id: "sqlite-one",
+        name: "Sqlite",
+        enabled: true,
+        transport: "stdio",
+        command: "echo",
+      },
+    ]);
+    mockLegacyStoreData.mcp_servers = [
+      {
+        id: "legacy",
+        name: "Legacy",
+        enabled: true,
+        transport: "stdio",
+        command: "node",
+      },
+    ];
+    resetStoreForTests();
+    const configs = await loadMcpConfigs();
+    expect(configs.map((c) => c.id)).toEqual(["sqlite-one"]);
+    expect(mockLegacyStoreData._mcp_migrated).toBeUndefined();
+  });
+
+  it("skips legacy migration when legacy data is invalid", async () => {
+    mockLegacyStoreData.mcp_servers = [{ id: 123, bad: true }];
     const configs = await loadMcpConfigs();
     expect(configs).toEqual(DEFAULT_CONFIGS);
+    expect(mockLegacyStoreData._mcp_migrated).toBeUndefined();
+  });
+
+  it("re-running loadMcpConfigs is idempotent (does not re-migrate)", async () => {
+    mockLegacyStoreData.mcp_servers = [
+      {
+        id: "legacy",
+        name: "Legacy",
+        enabled: true,
+        transport: "stdio",
+        command: "node",
+      },
+    ];
+    await loadMcpConfigs();
+    const callCountAfterFirst = (mockLegacyStoreData._mcp_migrated as boolean) ? 1 : 0;
+    expect(callCountAfterFirst).toBe(1);
+    const second = await loadMcpConfigs();
+    expect(second.map((c) => c.id)).toEqual(["legacy"]);
   });
 });
 
 describe("saveMcpConfigs", () => {
-  it("persists configs and calls save", async () => {
+  it("persists configs to SQLite", async () => {
     const configs = [
       { id: "test", name: "Test", enabled: true, transport: "stdio" as const, command: "echo" },
     ];
     await saveMcpConfigs(configs);
-    expect(mockStoreData.mcp_servers).toEqual(configs);
-    expect(saveMock).toHaveBeenCalled();
+    const loaded = await loadMcpConfigs();
+    expect(loaded).toEqual(configs);
+  });
+
+  it("overwrites prior configs entirely", async () => {
+    await saveMcpConfigs([{ id: "a", name: "A", enabled: true, transport: "stdio", command: "x" }]);
+    await saveMcpConfigs([
+      { id: "b", name: "B", enabled: false, transport: "stdio", command: "y" },
+    ]);
+    resetStoreForTests();
+    const loaded = await loadMcpConfigs();
+    expect(loaded.map((c) => c.id)).toEqual(["b"]);
   });
 });
 

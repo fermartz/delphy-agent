@@ -8,6 +8,7 @@ import {
   type ToolSet,
   tool,
 } from "ai";
+import { saveMemory } from "../db/memory";
 import { AuxiliaryClient } from "../llm/auxiliary";
 import { mcpManager } from "../mcp/manager";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
@@ -18,6 +19,7 @@ import type {
   AgentEvent,
   BackendAdapter,
   CompactResult,
+  MessagePersister,
   RuntimeErrorKind,
   SendOptions,
   Session,
@@ -160,10 +162,64 @@ type IterationOutcome =
   | { outcome: "done"; finishReason: string }
   | { outcome: "awaiting_approval" };
 
+const UPDATE_MEMORY_TOOL_NAME = "update_memory";
+
+const UPDATE_MEMORY_DESCRIPTION =
+  "Replace the user's persistent memory with the given content. Use this to record durable facts, preferences, ongoing projects, or constraints the user has shared. The full content you provide replaces what was previously stored, so include everything that should be remembered, not just the delta. Capped at 3000 characters. Saved memory becomes visible to you in the user's next session, not the current one.";
+
+const UPDATE_MEMORY_INPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    content: {
+      type: "string",
+      description:
+        "The complete memory content to store (overwrites prior memory). Plain text, up to 3000 characters.",
+    },
+  },
+  required: ["content"],
+  additionalProperties: false,
+};
+
 function buildToolSet(): ToolSet | undefined {
   const allTools = mcpManager.getAllTools();
-  if (allTools.length === 0) return undefined;
   const toolSet: ToolSet = {};
+
+  toolSet[UPDATE_MEMORY_TOOL_NAME] = tool({
+    description: UPDATE_MEMORY_DESCRIPTION,
+    inputSchema: jsonSchema(UPDATE_MEMORY_INPUT_SCHEMA),
+    needsApproval: false,
+    execute: async (input) => {
+      const content =
+        typeof input === "object" && input !== null && "content" in input
+          ? String((input as { content: unknown }).content ?? "")
+          : "";
+      try {
+        const { saved, truncated } = await saveMemory(content);
+        return {
+          content: [
+            {
+              type: "text",
+              text: truncated
+                ? `Memory saved (truncated to ${saved.length} chars). Visible next session.`
+                : `Memory saved (${saved.length} chars). Visible next session.`,
+            },
+          ],
+          isError: false,
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Failed to save memory: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  });
+
   for (const t of allTools) {
     toolSet[t.namespacedName] = tool({
       description: t.description ?? "",
@@ -200,10 +256,12 @@ class DirectApiSession implements Session {
 
   private messages: ModelMessage[] = [];
   private readonly systemPrompt: string;
+  private persistedCount = 0;
 
   private readonly apiKey: string;
   private readonly modelId: string;
   private readonly auxiliaryModelId: string;
+  private readonly persister?: MessagePersister;
 
   private currentAbort: AbortController | null = null;
 
@@ -214,12 +272,62 @@ class DirectApiSession implements Session {
   private pendingApprovals = new Map<string, PendingApproval>();
   private pendingApprovalsWaiter: Deferred<void> | null = null;
 
-  constructor(id: string, apiKey: string, modelId: string, auxiliaryModelId: string) {
+  constructor(
+    id: string,
+    apiKey: string,
+    modelId: string,
+    auxiliaryModelId: string,
+    initialMessages: ModelMessage[] = [],
+    initialMemory = "",
+    persister?: MessagePersister,
+  ) {
     this.id = id;
     this.apiKey = apiKey;
     this.modelId = modelId;
     this.auxiliaryModelId = auxiliaryModelId;
-    this.systemPrompt = buildSystemPrompt(defaultSystemPromptSlices());
+    this.messages = [...initialMessages];
+    this.persistedCount = this.messages.length;
+    this.persister = persister;
+    const slices = defaultSystemPromptSlices();
+    if (initialMemory.trim().length > 0) {
+      slices.context = `User memory (persists across sessions):\n${initialMemory.trim()}`;
+    }
+    this.systemPrompt = buildSystemPrompt(slices);
+  }
+
+  private async flushPersist(): Promise<void> {
+    if (!this.persister) {
+      this.persistedCount = this.messages.length;
+      return;
+    }
+    while (this.persistedCount < this.messages.length) {
+      const seq = this.persistedCount;
+      try {
+        await this.persister.append(seq, this.messages[seq]);
+      } catch (err) {
+        console.warn("[direct-api] persist append failed", err);
+        break;
+      }
+      this.persistedCount = seq + 1;
+    }
+    try {
+      await this.persister.touch();
+    } catch (err) {
+      console.warn("[direct-api] persist touch failed", err);
+    }
+  }
+
+  private async persistReplace(): Promise<void> {
+    if (!this.persister) {
+      this.persistedCount = this.messages.length;
+      return;
+    }
+    try {
+      await this.persister.replace([...this.messages]);
+      this.persistedCount = this.messages.length;
+    } catch (err) {
+      console.warn("[direct-api] persist replace failed", err);
+    }
   }
 
   events: AsyncIterable<AgentEvent> = {
@@ -260,6 +368,7 @@ class DirectApiSession implements Session {
     }
 
     this.messages.push({ role: "user", content: text });
+    await this.flushPersist();
 
     const tokensUsed = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
     if (tokensUsed > CONTEXT_LIMIT_TOKENS * CONTEXT_WARN_THRESHOLD) {
@@ -326,6 +435,7 @@ class DirectApiSession implements Session {
         if (this.turnState !== "awaiting_approval") return;
 
         this.messages.push(this.buildApprovalResponseMessage());
+        await this.flushPersist();
         this.pendingApprovals.clear();
       }
 
@@ -462,6 +572,7 @@ class DirectApiSession implements Session {
 
     const resp = await result.response;
     this.messages.push(...(resp.messages as ModelMessage[]));
+    await this.flushPersist();
 
     const usage = await result.usage;
     this.emitEvent({
@@ -573,6 +684,7 @@ class DirectApiSession implements Session {
         return;
       }
       this.messages = result.compactedMessages;
+      await this.persistReplace();
       this.lastCompactionSavedRatio = clampRatio(
         result.metrics.estimatedTokensSaved / Math.max(1, preTotalTokens),
       );
@@ -613,6 +725,7 @@ class DirectApiSession implements Session {
         };
       }
       this.messages = result.compactedMessages;
+      await this.persistReplace();
       this.lastCompactionSavedRatio = clampRatio(
         result.metrics.estimatedTokensSaved / Math.max(1, preTotalTokens),
       );
@@ -651,11 +764,15 @@ export const directApiAdapter: BackendAdapter = {
       throw resolved.error;
     }
     sessionCounter += 1;
+    const id = opts.sessionId ?? `direct-api-${sessionCounter}`;
     return new DirectApiSession(
-      `direct-api-${sessionCounter}`,
+      id,
       resolved.key,
       opts.modelId ?? profile.defaultModel,
       opts.auxiliaryModelId ?? "claude-haiku-4-5",
+      (opts.initialMessages ?? []) as ModelMessage[],
+      opts.initialMemory ?? "",
+      opts.persister,
     );
   },
 };

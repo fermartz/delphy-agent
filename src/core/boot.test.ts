@@ -36,6 +36,44 @@ vi.mock("./adapters/echo", () => ({
   },
 }));
 
+vi.mock("./db/memory", () => ({
+  loadMemory: vi.fn().mockResolvedValue(""),
+  saveMemory: vi.fn().mockResolvedValue({ saved: "", truncated: false }),
+  GLOBAL_MEMORY_ID: "global",
+  MEMORY_MAX_CHARS: 3000,
+}));
+
+vi.mock("./session-manager", () => ({
+  resolveSessionContext: vi.fn().mockResolvedValue({
+    sessionId: "s-test",
+    initialMessages: [],
+    persister: {
+      append: vi.fn().mockResolvedValue(undefined),
+      replace: vi.fn().mockResolvedValue(undefined),
+      touch: vi.fn().mockResolvedValue(undefined),
+    },
+    resumed: false,
+  }),
+  createFreshSession: vi.fn().mockResolvedValue({
+    sessionId: "s-fresh",
+    initialMessages: [],
+    persister: {
+      append: vi.fn().mockResolvedValue(undefined),
+      replace: vi.fn().mockResolvedValue(undefined),
+      touch: vi.fn().mockResolvedValue(undefined),
+    },
+    resumed: false,
+  }),
+  loadSessionContext: vi.fn().mockResolvedValue({
+    initialMessages: [],
+    persister: {
+      append: vi.fn().mockResolvedValue(undefined),
+      replace: vi.fn().mockResolvedValue(undefined),
+      touch: vi.fn().mockResolvedValue(undefined),
+    },
+  }),
+}));
+
 import { directApiAdapter } from "./adapters/direct-api";
 import { startActiveBackend } from "./boot";
 import { DEFAULT_SETTINGS } from "./settings/defaults";
@@ -70,10 +108,12 @@ describe("startActiveBackend → directApiAdapter pass-through", () => {
 
     const result = await startActiveBackend();
 
-    expect(mockedStart).toHaveBeenCalledWith({
-      modelId: "claude-opus-4-7",
-      auxiliaryModelId: "claude-haiku-4-5",
-    });
+    expect(mockedStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "claude-opus-4-7",
+        auxiliaryModelId: "claude-haiku-4-5",
+      }),
+    );
     expect(result.backend).toBe("anthropic-api");
   });
 
@@ -93,10 +133,12 @@ describe("startActiveBackend → directApiAdapter pass-through", () => {
 
     await startActiveBackend();
 
-    expect(mockedStart).toHaveBeenCalledWith({
-      modelId: DEFAULT_SETTINGS.main_model,
-      auxiliaryModelId: DEFAULT_SETTINGS.auxiliary_model,
-    });
+    expect(mockedStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: DEFAULT_SETTINGS.main_model,
+        auxiliaryModelId: DEFAULT_SETTINGS.auxiliary_model,
+      }),
+    );
   });
 
   it("threads a custom auxiliary_model through to directApiAdapter.start (pins R1-1 contract)", async () => {

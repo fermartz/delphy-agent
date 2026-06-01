@@ -5,13 +5,16 @@ import { BrandLogo } from "@/components/brand-logo";
 import { ChatIcon } from "@/components/chat-icon";
 import { ColorModeToggle } from "@/components/color-mode-toggle";
 import MarkdownText from "@/components/markdown-text";
+import { SessionSidebar } from "@/components/session-sidebar";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { Button } from "@/components/ui/button";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
+import { type ChatItem, projectMessagesToChatItems } from "./core/chat-projection";
 import { type CommandContext, dispatchInput } from "./core/commands";
+import { listSessions, type SessionListEntry } from "./core/db/sessions";
 import { mcpManager } from "./core/mcp/manager";
 import { loadMcpConfigs, saveMcpConfigs } from "./core/mcp/store";
 import type { McpServerConfig, McpServerStatus } from "./core/mcp/types";
@@ -32,26 +35,6 @@ import type { Theme } from "./themes/types";
 import { subscribeToThemeChanges } from "./themes/watcher";
 
 const ANTHROPIC_SECRET_KEY = "anthropic_api_key";
-
-type ChatItem =
-  | { kind: "user-text"; id: string; text: string }
-  | {
-      kind: "assistant-text";
-      id: string;
-      text: string;
-      status: "streaming" | "complete" | "error";
-    }
-  | {
-      kind: "approval";
-      id: string;
-      action: string;
-      payload: unknown;
-      verdict?: "allowed" | "denied";
-    }
-  | { kind: "tool-call"; id: string; name: string; input: unknown }
-  | { kind: "tool-result"; id: string; name: string; output: unknown; isError?: boolean }
-  | { kind: "runtime-error"; id: string; errorKind: RuntimeErrorKind; message: string }
-  | { kind: "system"; id: string; text: string; intent?: "info" | "error" };
 
 let itemCounter = 0;
 function nextItemId(): string {
@@ -117,6 +100,11 @@ function App() {
   const [themesVersion, setThemesVersion] = useState(0);
   const [mcpStatuses, setMcpStatuses] = useState<McpServerStatus[]>([]);
   const [mcpConfigs, setMcpConfigs] = useState<McpServerConfig[]>([]);
+  const [sessionList, setSessionList] = useState<SessionListEntry[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [resumeRequest, setResumeRequest] = useState<
+    { kind: "fresh" } | { kind: "resume"; id: string } | null
+  >(null);
   const sessionRef = useRef<Session | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
@@ -126,6 +114,32 @@ function App() {
     setReady(false);
     setStreaming(false);
     setKeyInput("");
+    setRebootCounter((c) => c + 1);
+  }
+
+  async function refreshSessionList() {
+    try {
+      const list = await listSessions();
+      setSessionList(list);
+    } catch (err) {
+      console.warn("listSessions failed", err);
+    }
+  }
+
+  function startFreshSession() {
+    setResumeRequest({ kind: "fresh" });
+    setItems([]);
+    setReady(false);
+    setStreaming(false);
+    setRebootCounter((c) => c + 1);
+  }
+
+  function switchToSession(id: string) {
+    if (id === activeSessionId) return;
+    setResumeRequest({ kind: "resume", id });
+    setItems([]);
+    setReady(false);
+    setStreaming(false);
     setRebootCounter((c) => c + 1);
   }
 
@@ -143,7 +157,13 @@ function App() {
     let active = true;
 
     (async () => {
-      const result = await startActiveBackend();
+      const bootOpts =
+        resumeRequest?.kind === "resume"
+          ? { resumeSessionId: resumeRequest.id }
+          : resumeRequest?.kind === "fresh"
+            ? { freshSession: true }
+            : {};
+      const result = await startActiveBackend(bootOpts);
       if (!active) {
         await result.session.close();
         return;
@@ -152,7 +172,13 @@ function App() {
       setBackend(result.backend);
       setBootError(result.error ?? null);
       setSettings(result.settings);
+      setActiveSessionId(result.sessionId);
+      if (result.initialMessages.length > 0) {
+        setItems(projectMessagesToChatItems(result.initialMessages));
+      }
+      void refreshSessionList();
       setReady(true);
+      setResumeRequest(null);
 
       for await (const event of result.session.events) {
         if (!active) break;
@@ -212,6 +238,7 @@ function App() {
               finalizeInFlight(prev, event.reason === "complete" ? "complete" : "error"),
             );
             setStreaming(false);
+            void refreshSessionList();
             break;
 
           case "error":
@@ -572,124 +599,136 @@ function App() {
   const COMMAND_HINTS = ["/help", "/clear", "/model", "/compact"];
 
   return (
-    <main className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex items-center justify-between border-b border-border px-4 py-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <BrandLogo size={40} />
-          <h1 className="shrink-0 text-lg font-semibold tracking-tight">Delphy Agent</h1>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <ThemeSwitcher
-            themes={themes}
-            selectedThemeId={settings.selected_theme}
-            onThemeChange={handleThemeChange}
+    <main className="flex h-screen bg-background text-foreground">
+      <SessionSidebar
+        sessions={sessionList}
+        activeSessionId={activeSessionId}
+        onSelect={switchToSession}
+        onNew={startFreshSession}
+      />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center justify-between border-b border-border px-4 py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <BrandLogo size={40} />
+            <h1 className="shrink-0 text-lg font-semibold tracking-tight">Delphy Agent</h1>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <ThemeSwitcher
+              themes={themes}
+              selectedThemeId={settings.selected_theme}
+              onThemeChange={handleThemeChange}
+            />
+            <ColorModeToggle mode={settings.color_mode} onChange={handleColorModeChange} />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={openSettings}
+              aria-label="Open settings"
+              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            >
+              <SettingsIcon className="h-3 w-3" />
+            </Button>
+          </div>
+        </header>
+
+        {backend === "echo-fallback" && bootError ? (
+          <BootBanner
+            errorKind={bootError.kind}
+            errorMessage={bootError.message}
+            keyInput={keyInput}
+            setKeyInput={setKeyInput}
+            onSave={handleSaveKey}
+            onRetry={triggerReboot}
+            saving={saving}
           />
-          <ColorModeToggle mode={settings.color_mode} onChange={handleColorModeChange} />
+        ) : null}
+
+        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
+          {items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {backend === "anthropic-api"
+                ? "Type a message to chat with Claude."
+                : "Type a message to see the echo adapter stream."}
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {items.map((it) => (
+                <li key={it.id} className="flex gap-2">
+                  <ChatIcon item={it} />
+                  <div className="flex-1">{renderItem(it, handleApproval, handleChangeKey)}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <StatusBar
+          brand="delphy-agent"
+          model={settings.main_model}
+          activity={activityLabel}
+          commandHints={COMMAND_HINTS}
+        />
+
+        <form
+          onSubmit={handleSubmit}
+          className="flex items-end gap-2 border-t border-border px-4 py-3"
+        >
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.currentTarget.value)}
+            placeholder={`Message ${backendLabel}...`}
+            disabled={inputDisabled}
+            className="flex-1 rounded-lg border-none bg-muted px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+          />
           <Button
-            type="button"
+            type="submit"
             variant="ghost"
             size="icon"
-            onClick={openSettings}
-            aria-label="Open settings"
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            disabled={inputDisabled || input.trim().length === 0}
+            aria-label="Send message"
+            className="mb-0.5 shrink-0"
           >
-            <SettingsIcon className="h-3 w-3" />
+            {streaming ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
           </Button>
-        </div>
-      </header>
+        </form>
 
-      {backend === "echo-fallback" && bootError ? (
-        <BootBanner
-          errorKind={bootError.kind}
-          errorMessage={bootError.message}
-          keyInput={keyInput}
-          setKeyInput={setKeyInput}
-          onSave={handleSaveKey}
-          onRetry={triggerReboot}
-          saving={saving}
+        <SettingsModal
+          open={settingsOpen}
+          onOpenChange={(open) => (open ? openSettings() : closeSettings())}
+          currentModel={settings.main_model}
+          currentAuxiliaryModel={settings.auxiliary_model}
+          availableModels={availableModels}
+          modelsLoading={modelsLoading}
+          modelsError={modelsError}
+          themes={themes}
+          selectedThemeId={settings.selected_theme}
+          colorMode={settings.color_mode}
+          mcpStatuses={mcpStatuses}
+          mcpConfigs={mcpConfigs}
+          onSelectModel={handleModelChange}
+          onSelectAuxiliaryModel={handleAuxiliaryModelChange}
+          onThemeChange={handleThemeChange}
+          onColorModeChange={handleColorModeChange}
+          onRetry={openSettings}
+          onMcpAdd={handleMcpAdd}
+          onMcpEdit={handleMcpEdit}
+          onMcpRemove={handleMcpRemove}
+          onMcpRestart={handleMcpRestart}
+          onMcpToggle={handleMcpToggle}
         />
-      ) : null}
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
-        {items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {backend === "anthropic-api"
-              ? "Type a message to chat with Claude."
-              : "Type a message to see the echo adapter stream."}
-          </p>
-        ) : (
-          <ul className="space-y-3">
-            {items.map((it) => (
-              <li key={it.id} className="flex gap-2">
-                <ChatIcon item={it} />
-                <div className="flex-1">{renderItem(it, handleApproval, handleChangeKey)}</div>
-              </li>
-            ))}
-          </ul>
-        )}
+        {toast ? (
+          <div className="pointer-events-none fixed top-6 left-1/2 -translate-x-1/2 rounded border border-primary/30 bg-primary px-4 py-2 text-xs text-primary-foreground shadow-lg">
+            {toast}
+          </div>
+        ) : null}
       </div>
-
-      <StatusBar
-        brand="delphy-agent"
-        model={settings.main_model}
-        activity={activityLabel}
-        commandHints={COMMAND_HINTS}
-      />
-
-      <form
-        onSubmit={handleSubmit}
-        className="flex items-end gap-2 border-t border-border px-4 py-3"
-      >
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.currentTarget.value)}
-          placeholder={`Message ${backendLabel}...`}
-          disabled={inputDisabled}
-          className="flex-1 rounded-lg border-none bg-muted px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-        />
-        <Button
-          type="submit"
-          variant="ghost"
-          size="icon"
-          disabled={inputDisabled || input.trim().length === 0}
-          aria-label="Send message"
-          className="mb-0.5 shrink-0"
-        >
-          {streaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-        </Button>
-      </form>
-
-      <SettingsModal
-        open={settingsOpen}
-        onOpenChange={(open) => (open ? openSettings() : closeSettings())}
-        currentModel={settings.main_model}
-        currentAuxiliaryModel={settings.auxiliary_model}
-        availableModels={availableModels}
-        modelsLoading={modelsLoading}
-        modelsError={modelsError}
-        themes={themes}
-        selectedThemeId={settings.selected_theme}
-        colorMode={settings.color_mode}
-        mcpStatuses={mcpStatuses}
-        mcpConfigs={mcpConfigs}
-        onSelectModel={handleModelChange}
-        onSelectAuxiliaryModel={handleAuxiliaryModelChange}
-        onThemeChange={handleThemeChange}
-        onColorModeChange={handleColorModeChange}
-        onRetry={openSettings}
-        onMcpAdd={handleMcpAdd}
-        onMcpEdit={handleMcpEdit}
-        onMcpRemove={handleMcpRemove}
-        onMcpRestart={handleMcpRestart}
-        onMcpToggle={handleMcpToggle}
-      />
-
-      {toast ? (
-        <div className="pointer-events-none fixed top-6 left-1/2 -translate-x-1/2 rounded bg-foreground px-4 py-2 text-xs text-background shadow-lg">
-          {toast}
-        </div>
-      ) : null}
     </main>
   );
 }

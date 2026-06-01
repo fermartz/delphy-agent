@@ -38,7 +38,7 @@ Version field: free-form string today; treated as opaque metadata. May become en
 
 ## MCP server configuration
 
-Each MCP server known to the app is stored as an entry in the `mcp_servers` array within `settings.json` (interim `tauri-plugin-store` implementation; migrates to the `mcp_servers` SQLite table when BACKLOG #4 ships). The **external shape** — what users edit through the UI, what gets exported, what a "share this MCP" file looks like — is this JSON:
+Each MCP server known to the app is stored as a row in the SQLite `mcp_servers` table (since BACKLOG #4 shipped 2026-05-30). Pre-BACKLOG-#4 installs that had configs in `settings.json::mcp_servers` are migrated one-time on first boot and the legacy file is flagged `_mcp_migrated: true`. The **external shape** — what users edit through the UI, what gets exported, what a "share this MCP" file looks like — is this JSON:
 
 ```json
 {
@@ -111,19 +111,11 @@ Location: platform-native app-data directory via Tauri's `app_data_dir()` resolu
   "color_mode": "system",
   "default_backend": "anthropic-api",
   "main_model": "claude-opus-4-7",
-  "auxiliary_model": "claude-haiku-4-5",
-  "mcp_servers": [
-    {
-      "id": "fetch",
-      "name": "Fetch",
-      "enabled": true,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "mcp-fetch-server"]
-    }
-  ]
+  "auxiliary_model": "claude-haiku-4-5"
 }
 ```
+
+**Note:** Pre-BACKLOG-#4 installs (before 2026-05-30) may have an additional `mcp_servers` array key — that historical layout has been superseded by the SQLite `mcp_servers` table and gets migrated on first boot (after migration the runtime sets `_mcp_migrated: true` and ignores the legacy array). New installs never write `mcp_servers` here. See [MCP server configuration](#mcp-server-configuration).
 
 ### Fields
 
@@ -134,7 +126,7 @@ Location: platform-native app-data directory via Tauri's `app_data_dir()` resolu
 | `default_backend` | string | Any registered adapter `id` |
 | `main_model` | string | Provider/model ID used for the user-visible turn (e.g. `claude-opus-4-7`, `gpt-5`) |
 | `auxiliary_model` | string | Provider/model ID used for compaction, title generation, and search-helper calls. Should be a cheap, fast model (e.g. `claude-haiku-4-5`, `gemini-2.5-flash`) |
-| `mcp_servers` | array | Array of `McpServerConfig` objects (see [MCP server configuration](#mcp-server-configuration)). Seeded with a default entry on first launch. Interim storage until SQLite (BACKLOG #4) |
+| `_mcp_migrated` | boolean (legacy) | Flag written on the one-time migration of `mcp_servers` from `settings.json` into the SQLite `mcp_servers` table (BACKLOG #4, 2026-05-30). When `true`, the runtime ignores any further changes to a `mcp_servers` array in `settings.json`. Pre-BACKLOG-#4 installs may still carry that array as a historical backup; new installs never write it. |
 
 Unknown keys are preserved on write (forward compatibility). Invalid values fall back to defaults with a startup warning.
 

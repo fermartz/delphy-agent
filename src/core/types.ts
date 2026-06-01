@@ -4,11 +4,21 @@ export interface SendOptions {
   signal?: AbortSignal;
 }
 
+export interface MessagePersister {
+  append(seq: number, message: unknown): Promise<void>;
+  replace(messages: unknown[]): Promise<void>;
+  touch(): Promise<void>;
+}
+
 export interface SessionOptions {
   systemPrompt?: string;
   signal?: AbortSignal;
   modelId?: string;
   auxiliaryModelId?: string;
+  sessionId?: string;
+  initialMessages?: unknown[];
+  initialMemory?: string;
+  persister?: MessagePersister;
 }
 
 export interface CompactionMetrics {

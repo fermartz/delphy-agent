@@ -1,9 +1,16 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { z } from "zod";
+import {
+  countMcpConfigs,
+  listMcpConfigsFromDb,
+  replaceMcpConfigs,
+  seedMcpConfigs,
+} from "../db/mcp";
 import type { McpServerConfig } from "./types";
 
-const STORE_FILE = "settings.json";
-const STORE_KEY = "mcp_servers";
+const LEGACY_STORE_FILE = "settings.json";
+const LEGACY_STORE_KEY = "mcp_servers";
+const LEGACY_MIGRATED_FLAG = "_mcp_migrated";
 
 const MCP_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 const LITERAL_KEY_PATTERN = /^(sk-ant-|sk-)[A-Za-z0-9]/;
@@ -34,39 +41,78 @@ const DEFAULT_CONFIGS: McpServerConfig[] = [
   },
 ];
 
-let storePromise: Promise<Store> | null = null;
+let legacyStorePromise: Promise<Store> | null = null;
+let migrationAttempted = false;
 
-function getStore(): Promise<Store> {
-  if (!storePromise) {
-    storePromise = load(STORE_FILE, { autoSave: false, defaults: {} });
+function getLegacyStore(): Promise<Store> {
+  if (!legacyStorePromise) {
+    legacyStorePromise = load(LEGACY_STORE_FILE, { autoSave: false, defaults: {} });
   }
-  return storePromise;
+  return legacyStorePromise;
 }
 
 export function resetStoreForTests(): void {
-  storePromise = null;
+  legacyStorePromise = null;
+  migrationAttempted = false;
+}
+
+/**
+ * One-time migration from the old tauri-plugin-store backing to SQLite.
+ * Runs when the mcp_servers SQLite table is empty AND a legacy store file
+ * has not yet been flagged as migrated. Subsequent boots short-circuit
+ * via the in-memory `migrationAttempted` flag.
+ */
+async function migrateFromLegacyStoreIfNeeded(): Promise<void> {
+  if (migrationAttempted) return;
+  migrationAttempted = true;
+
+  try {
+    const dbCount = await countMcpConfigs();
+    if (dbCount > 0) return;
+  } catch {
+    // SQLite unavailable — treat as no-op; subsequent loads will still try.
+    migrationAttempted = false;
+    return;
+  }
+
+  let store: Store;
+  try {
+    store = await getLegacyStore();
+  } catch {
+    return;
+  }
+
+  const alreadyMigrated = await store.get<boolean>(LEGACY_MIGRATED_FLAG);
+  if (alreadyMigrated) return;
+
+  const raw = await store.get<unknown>(LEGACY_STORE_KEY);
+  if (raw === undefined || raw === null) return;
+
+  const parsed = McpServerConfigArraySchema.safeParse(raw);
+  if (!parsed.success) return;
+
+  try {
+    await replaceMcpConfigs(parsed.data);
+    await store.set(LEGACY_MIGRATED_FLAG, true);
+    await store.save();
+  } catch (err) {
+    console.warn("[mcp-store] migration to SQLite failed", err);
+  }
 }
 
 export async function loadMcpConfigs(): Promise<McpServerConfig[]> {
-  const store = await getStore();
-  const raw = await store.get<unknown>(STORE_KEY);
-  if (raw === undefined || raw === null) {
-    await saveMcpConfigs(DEFAULT_CONFIGS);
+  await migrateFromLegacyStoreIfNeeded();
+  try {
+    await seedMcpConfigs(DEFAULT_CONFIGS);
+    return await listMcpConfigsFromDb();
+  } catch (err) {
+    console.warn("[mcp-store] SQLite load failed, returning defaults", err);
     return [...DEFAULT_CONFIGS];
   }
-  const result = McpServerConfigArraySchema.safeParse(raw);
-  if (!result.success) {
-    console.warn("mcp-store: invalid configs, resetting to defaults", result.error);
-    await saveMcpConfigs(DEFAULT_CONFIGS);
-    return [...DEFAULT_CONFIGS];
-  }
-  return result.data;
 }
 
 export async function saveMcpConfigs(configs: McpServerConfig[]): Promise<void> {
-  const store = await getStore();
-  await store.set(STORE_KEY, configs);
-  await store.save();
+  await replaceMcpConfigs(configs);
 }
 
 export interface McpConfigValidationError {
