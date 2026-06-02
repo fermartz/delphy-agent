@@ -17,27 +17,39 @@ import {
 } from "@/components/ui/select";
 import { type McpConfigValidationError, validateMcpConfig } from "@/core/mcp/store";
 import type { McpServerConfig, McpServerStatus } from "@/core/mcp/types";
-import type { ColorMode } from "@/core/settings/types";
+import type { ProviderProfile } from "@/core/providers/types";
+import type { ColorMode, Settings } from "@/core/settings/types";
 import type { Theme } from "@/themes/types";
+import { ProviderModelPicker } from "./provider-model-picker";
+import { type ProviderRowState, ProvidersPanel } from "./providers-panel";
 
 export interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  currentModel: string;
-  currentAuxiliaryModel: string;
-  availableModels: string[] | null;
-  modelsLoading: boolean;
-  modelsError: string | null;
+  settings: Settings;
+  currentMainProvider: string | null;
+  currentModel: string | null;
+  currentAuxiliaryProvider: string | null;
+  currentAuxiliaryModel: string | null;
   themes: Theme[];
   selectedThemeId: string;
   colorMode: ColorMode;
   mcpStatuses: McpServerStatus[];
   mcpConfigs: McpServerConfig[];
-  onSelectModel: (model: string) => void;
-  onSelectAuxiliaryModel: (model: string) => void;
+  providerProfiles: ProviderProfile[];
+  providerStates: Record<string, ProviderRowState>;
+  providerEditId: string | null;
+  providerHighlightId?: string | null;
+  providerSaving: boolean;
+  resolveApiKey: (secretKey: string) => Promise<string | null>;
+  onProviderEdit: (providerId: string | null) => void;
+  onProviderSave: (providerId: string, key: string) => void | Promise<void>;
+  onProviderTest: (providerId: string) => void | Promise<void>;
+  onProviderRemove: (providerId: string) => void | Promise<void>;
+  onMainProviderModelChange: (providerId: string, modelId: string) => void;
+  onAuxiliaryProviderModelChange: (providerId: string, modelId: string) => void;
   onThemeChange: (themeId: string) => void;
   onColorModeChange: (mode: ColorMode) => void;
-  onRetry: () => void;
   onMcpAdd: (config: McpServerConfig) => void;
   onMcpEdit: (config: McpServerConfig) => void;
   onMcpRemove: (id: string) => void;
@@ -50,21 +62,30 @@ const COLOR_MODES: readonly ColorMode[] = ["light", "dark", "system"];
 export function SettingsModal({
   open,
   onOpenChange,
+  settings,
+  currentMainProvider,
   currentModel,
+  currentAuxiliaryProvider,
   currentAuxiliaryModel,
-  availableModels,
-  modelsLoading,
-  modelsError,
   themes,
   selectedThemeId,
   colorMode,
   mcpStatuses,
   mcpConfigs,
-  onSelectModel,
-  onSelectAuxiliaryModel,
+  providerProfiles,
+  providerStates,
+  providerEditId,
+  providerHighlightId,
+  providerSaving,
+  resolveApiKey,
+  onProviderEdit,
+  onProviderSave,
+  onProviderTest,
+  onProviderRemove,
+  onMainProviderModelChange,
+  onAuxiliaryProviderModelChange,
   onThemeChange,
   onColorModeChange,
-  onRetry,
   onMcpAdd,
   onMcpEdit,
   onMcpRemove,
@@ -118,9 +139,6 @@ export function SettingsModal({
         { id: selectedThemeId, label: `${selectedThemeId} (unavailable)` } as any,
         ...themes,
       ];
-  const showSavedModelOption = availableModels !== null && !availableModels.includes(currentModel);
-  const showSavedAuxiliaryOption =
-    availableModels !== null && !availableModels.includes(currentAuxiliaryModel);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -132,85 +150,39 @@ export function SettingsModal({
           </DialogDescription>
         </DialogHeader>
 
-        <section className="space-y-2">
-          <div className="text-xs font-medium text-foreground">Main model</div>
-          <div className="text-xs text-muted-foreground">
-            Current: <span className="font-mono text-foreground">{currentModel}</span>
-          </div>
+        <ProvidersPanel
+          profiles={providerProfiles}
+          states={providerStates}
+          editingId={providerEditId}
+          highlightId={providerHighlightId}
+          saving={providerSaving}
+          onEdit={onProviderEdit}
+          onSave={onProviderSave}
+          onTest={onProviderTest}
+          onRemove={onProviderRemove}
+        />
 
-          {modelsLoading ? (
-            <div className="text-xs text-muted-foreground">Loading models…</div>
-          ) : modelsError ? (
-            <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              <div>{modelsError}</div>
-              <Button type="button" variant="destructive" size="sm" onClick={onRetry}>
-                Retry
-              </Button>
-            </div>
-          ) : availableModels ? (
-            <>
-              <Select value={currentModel} onValueChange={onSelectModel}>
-                <SelectTrigger aria-label="Main model" className="w-full">
-                  <SelectValue placeholder="Select a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {showSavedModelOption ? (
-                    <SelectItem value={currentModel}>{currentModel} (saved)</SelectItem>
-                  ) : null}
-                  {availableModels.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Changes apply when you start a new chat — your current conversation keeps its model.
-              </p>
-            </>
-          ) : null}
-        </section>
+        <ProviderModelPicker
+          label="Main"
+          profiles={providerProfiles}
+          providerHasKey={(id) => providerStates[id]?.status === "configured"}
+          resolveApiKey={resolveApiKey}
+          settings={settings}
+          currentProviderId={currentMainProvider}
+          currentModelId={currentModel}
+          onChange={onMainProviderModelChange}
+        />
 
-        <section className="space-y-2">
-          <div className="text-xs font-medium text-foreground">Auxiliary model</div>
-          <div className="text-xs text-muted-foreground">
-            Current: <span className="font-mono text-foreground">{currentAuxiliaryModel}</span>
-          </div>
-
-          {modelsLoading ? (
-            <div className="text-xs text-muted-foreground">Loading models…</div>
-          ) : modelsError ? (
-            <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              <div>{modelsError}</div>
-              <Button type="button" variant="destructive" size="sm" onClick={onRetry}>
-                Retry
-              </Button>
-            </div>
-          ) : availableModels ? (
-            <>
-              <Select value={currentAuxiliaryModel} onValueChange={onSelectAuxiliaryModel}>
-                <SelectTrigger aria-label="Auxiliary model" className="w-full">
-                  <SelectValue placeholder="Select a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {showSavedAuxiliaryOption ? (
-                    <SelectItem value={currentAuxiliaryModel}>
-                      {currentAuxiliaryModel} (saved)
-                    </SelectItem>
-                  ) : null}
-                  {availableModels.map((m) => (
-                    <SelectItem key={`aux-${m}`} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Used during conversation compaction. Cheaper models save tokens on long sessions.
-              </p>
-            </>
-          ) : null}
-        </section>
+        <ProviderModelPicker
+          label="Auxiliary"
+          profiles={providerProfiles}
+          providerHasKey={(id) => providerStates[id]?.status === "configured"}
+          resolveApiKey={resolveApiKey}
+          settings={settings}
+          currentProviderId={currentAuxiliaryProvider}
+          currentModelId={currentAuxiliaryModel}
+          onChange={onAuxiliaryProviderModelChange}
+        />
 
         <section className="space-y-2">
           <div className="text-xs font-medium text-foreground">Theme</div>

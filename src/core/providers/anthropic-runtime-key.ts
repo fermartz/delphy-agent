@@ -1,22 +1,24 @@
-// Runtime-only key holder for the Linux `secure-storage-unavailable` fallback path.
-// The key value lives only in this module's JS heap. It is:
-//   - Never written to disk.
-//   - Never written to localStorage, sessionStorage, or IndexedDB.
-//   - Never serialized into React state that could later be persisted.
-//   - Cleared on app close (the process dying takes the heap with it).
-// On macOS/Windows/Linux-with-Secret-Service this module is never written to;
-// the OS keychain via Tauri's set_secret/get_secret commands is used instead.
+// Back-compat shim for the pre-multi-provider runtime-key API. New code
+// should import from `./runtime-keys` and pass the provider's secretKey.
+// This module hard-codes the Anthropic secret key so existing call sites
+// keep working until they migrate.
 
-let runtimeKey: string | null = null;
+import {
+  clearRuntimeKey as clearKey,
+  getRuntimeKey as getKey,
+  setRuntimeKey as setKey,
+} from "./runtime-keys";
+
+const ANTHROPIC_SECRET_KEY = "anthropic_api_key";
 
 export function getRuntimeKey(): string | null {
-  return runtimeKey;
+  return getKey(ANTHROPIC_SECRET_KEY);
 }
 
 export function setRuntimeKey(value: string): void {
-  runtimeKey = value;
+  setKey(ANTHROPIC_SECRET_KEY, value);
 }
 
 export function clearRuntimeKey(): void {
-  runtimeKey = null;
+  clearKey(ANTHROPIC_SECRET_KEY);
 }

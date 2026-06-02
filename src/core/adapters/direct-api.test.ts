@@ -191,12 +191,16 @@ describe("directApiAdapter — event mapping", () => {
     await session.sendMessage("hi");
     const events = await collectOneTurn(iter);
 
-    expect(events.map((e) => e.type)).toEqual(["text", "text", "usage", "done"]);
-    const [t1, t2, u, d] = events;
+    // BACKLOG #12.A CP3 added a `context_usage` event after each turn's
+    // `usage`. The sequence is now: text* + usage + context_usage + done.
+    expect(events.map((e) => e.type)).toEqual(["text", "text", "usage", "context_usage", "done"]);
+    const [t1, t2, u, ctx, d] = events;
     expect(t1.type === "text" && t1.delta).toBe("Hello, ");
     expect(t2.type === "text" && t2.delta).toBe("world.");
     expect(u.type === "usage" && u.inputTokens).toBe(10);
     expect(u.type === "usage" && u.outputTokens).toBe(20);
+    expect(ctx.type === "context_usage" && ctx.limit).toBe(200_000);
+    expect(ctx.type === "context_usage" && ctx.percent).toBeGreaterThanOrEqual(0);
     expect(d.type === "done" && d.reason).toBe("complete");
 
     await session.close();
@@ -214,8 +218,9 @@ describe("directApiAdapter — event mapping", () => {
     await session.sendMessage("hi");
     const events = await collectOneTurn(iter);
 
-    expect(events.map((e) => e.type)).toEqual(["error", "usage", "done"]);
-    const [err, , done] = events;
+    // CP3 added context_usage after usage; sequence is now error + usage + context_usage + done.
+    expect(events.map((e) => e.type)).toEqual(["error", "usage", "context_usage", "done"]);
+    const [err, , , done] = events;
     expect(err.type === "error" && err.kind).toBe("invalid-key");
     expect(done.type === "done" && done.reason).toBe("error");
 

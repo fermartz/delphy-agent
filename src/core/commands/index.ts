@@ -3,6 +3,7 @@ import compactCommand from "./compact";
 import helpCommand from "./help";
 import modelCommand from "./model";
 import { registerCommand } from "./registry";
+import statusCommand from "./status";
 
 export { dispatchInput } from "./dispatch";
 export { parseInput } from "./parser";
@@ -21,3 +22,4 @@ registerCommand(helpCommand);
 registerCommand(clearCommand);
 registerCommand(modelCommand);
 registerCommand(compactCommand);
+registerCommand(statusCommand);

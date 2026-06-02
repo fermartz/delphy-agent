@@ -110,8 +110,11 @@ Location: platform-native app-data directory via Tauri's `app_data_dir()` resolu
   "selected_theme": "perpetuity",
   "color_mode": "system",
   "default_backend": "anthropic-api",
+  "main_provider": "anthropic",
   "main_model": "claude-opus-4-7",
-  "auxiliary_model": "claude-haiku-4-5"
+  "auxiliary_provider": "openai",
+  "auxiliary_model": "gpt-5-nano",
+  "openai_compatible_base_url": null
 }
 ```
 
@@ -124,8 +127,11 @@ Location: platform-native app-data directory via Tauri's `app_data_dir()` resolu
 | `selected_theme` | string | Any registered theme `id` |
 | `color_mode` | string | `"light"` \| `"dark"` \| `"system"` |
 | `default_backend` | string | Any registered adapter `id` |
-| `main_model` | string | Provider/model ID used for the user-visible turn (e.g. `claude-opus-4-7`, `gpt-5`) |
-| `auxiliary_model` | string | Provider/model ID used for compaction, title generation, and search-helper calls. Should be a cheap, fast model (e.g. `claude-haiku-4-5`, `gemini-2.5-flash`) |
+| `main_provider` | string \| null | Active provider id for the user-visible turn (e.g. `"anthropic"`, `"openai"`, `"google"`, `"xai"`, `"openai-compatible"`). `null` triggers the First-Run Welcome step (BACKLOG #12.A Parameter 10). |
+| `main_model` | string \| null | Model id within the active provider (e.g. `claude-opus-4-7`, `gpt-5`). `null` falls back to the active profile's `defaultModel`. |
+| `auxiliary_provider` | string \| null | Provider id for compaction / title-gen / search-helper calls. `null` falls back to `main_provider`. |
+| `auxiliary_model` | string \| null | Model id within the auxiliary provider. `null` falls back to that profile's `defaultAuxiliaryModel`, or its `defaultModel` if unset. Should be cheap + fast (e.g. `claude-haiku-4-5`, `gemini-2.5-flash-lite`, `gpt-5-nano`). |
+| `openai_compatible_base_url` | string \| null | Base URL for the Custom OpenAI-compatible profile (Kimi/Moonshot, DeepSeek, OpenRouter, Together, Groq, Ollama OpenAI-compat, LM Studio, etc.). `null` or empty = unset; the profile's `model()` rejects until set. |
 | `_mcp_migrated` | boolean (legacy) | Flag written on the one-time migration of `mcp_servers` from `settings.json` into the SQLite `mcp_servers` table (BACKLOG #4, 2026-05-30). When `true`, the runtime ignores any further changes to a `mcp_servers` array in `settings.json`. Pre-BACKLOG-#4 installs may still carry that array as a historical backup; new installs never write it. |
 
 Unknown keys are preserved on write (forward compatibility). Invalid values fall back to defaults with a startup warning.

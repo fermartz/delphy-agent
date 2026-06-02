@@ -6,10 +6,20 @@ const ANTHROPIC_BETA_HEADER = "prompt-caching-2024-07-31";
 const MODELS_ENDPOINT = "https://api.anthropic.com/v1/models";
 const ANTHROPIC_VERSION = "2023-06-01";
 
+// Pricing per https://www.anthropic.com/pricing (as of 2026-06-02). Update
+// here when Anthropic revises their rate card.
+const PRICING = {
+  "claude-opus-4-7": { inputPerMTok: 15, outputPerMTok: 75 },
+  "claude-opus-4-6": { inputPerMTok: 15, outputPerMTok: 75 },
+  "claude-sonnet-4-6": { inputPerMTok: 3, outputPerMTok: 15 },
+  "claude-haiku-4-5": { inputPerMTok: 1, outputPerMTok: 5 },
+} as const;
+
 export const anthropicProfile: ProviderProfile = {
   id: "anthropic",
   label: "Anthropic (direct API)",
   defaultModel: "claude-sonnet-4-6",
+  defaultAuxiliaryModel: "claude-haiku-4-5",
   secretKey: "anthropic_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel => {
@@ -33,9 +43,6 @@ export const anthropicProfile: ProviderProfile = {
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": ANTHROPIC_VERSION,
-        // Required for browser/webview-origin requests — same opt-in as the chat
-        // path's headers(). Without it Anthropic's CORS preflight fails with HTTP 400
-        // and the fetch surfaces as a generic "Load failed".
         "anthropic-dangerous-direct-browser-access": "true",
       },
     });
@@ -45,4 +52,10 @@ export const anthropicProfile: ProviderProfile = {
     const payload = (await response.json()) as { data: Array<{ id: string }> };
     return payload.data.map((m) => m.id);
   },
+
+  curatedModels: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+
+  pricing: PRICING,
+
+  discoveryFingerprint: (apiKey) => apiKey,
 };

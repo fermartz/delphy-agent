@@ -133,10 +133,14 @@ describe("startActiveBackend → directApiAdapter pass-through", () => {
 
     await startActiveBackend();
 
+    // Post-BACKLOG #12.A: DEFAULT_SETTINGS.main_model / auxiliary_model are
+    // null until First-Run Welcome (Parameter 10) sets them. boot.ts applies
+    // a hardcoded Anthropic fallback in CP1 (replaced by the polymorphic
+    // resolver in CP3). The test now pins the fallback values.
     expect(mockedStart).toHaveBeenCalledWith(
       expect.objectContaining({
-        modelId: DEFAULT_SETTINGS.main_model,
-        auxiliaryModelId: DEFAULT_SETTINGS.auxiliary_model,
+        modelId: "claude-sonnet-4-6",
+        auxiliaryModelId: "claude-haiku-4-5",
       }),
     );
   });

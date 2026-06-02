@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import { ChatIcon } from "@/components/chat-icon";
 import { ColorModeToggle } from "@/components/color-mode-toggle";
+import { FirstRunWelcome } from "@/components/first-run-welcome";
 import MarkdownText from "@/components/markdown-text";
+import type { ProviderRowState } from "@/components/providers-panel";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
@@ -14,16 +16,17 @@ import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { type ChatItem, projectMessagesToChatItems } from "./core/chat-projection";
 import { type CommandContext, dispatchInput } from "./core/commands";
-import { listSessions, type SessionListEntry } from "./core/db/sessions";
+import { getSession, listSessions, type SessionListEntry } from "./core/db/sessions";
 import { mcpManager } from "./core/mcp/manager";
 import { loadMcpConfigs, saveMcpConfigs } from "./core/mcp/store";
 import type { McpServerConfig, McpServerStatus } from "./core/mcp/types";
+import { getProvider, listProviders } from "./core/providers";
 import { anthropicProfile } from "./core/providers/anthropic";
 import {
-  clearRuntimeKey,
-  getRuntimeKey,
-  setRuntimeKey,
-} from "./core/providers/anthropic-runtime-key";
+  fetchDiscovery,
+  invalidate as invalidateDiscovery,
+} from "./core/providers/discovery-cache";
+import { clearRuntimeKey, getRuntimeKey, setRuntimeKey } from "./core/providers/runtime-keys";
 import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
 import type { ColorMode, Settings } from "./core/settings/types";
@@ -34,22 +37,20 @@ import { loadAllThemes } from "./themes/loader";
 import type { Theme } from "./themes/types";
 import { subscribeToThemeChanges } from "./themes/watcher";
 
-const ANTHROPIC_SECRET_KEY = "anthropic_api_key";
-
 let itemCounter = 0;
 function nextItemId(): string {
   itemCounter += 1;
   return `i-${itemCounter}`;
 }
 
-async function resolveAnthropicApiKey(): Promise<string | null> {
+async function resolveProviderApiKey(secretKey: string): Promise<string | null> {
   try {
-    const stored = await invoke<string | null>("get_secret", { key: ANTHROPIC_SECRET_KEY });
+    const stored = await invoke<string | null>("get_secret", { key: secretKey });
     if (stored && stored.length > 0) return stored;
   } catch {
     // SECURE_STORAGE_UNAVAILABLE on bare Linux — fall through to runtime.
   }
-  const runtime = getRuntimeKey();
+  const runtime = getRuntimeKey(secretKey);
   return runtime && runtime.length > 0 ? runtime : null;
 }
 
@@ -87,9 +88,6 @@ function App() {
   const [rebootCounter, setRebootCounter] = useState(0);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [availableModels, setAvailableModels] = useState<string[] | null>(null);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [themes, setThemes] = useState<Theme[]>([]);
   const [themesLoaded, setThemesLoaded] = useState(false);
@@ -102,9 +100,38 @@ function App() {
   const [mcpConfigs, setMcpConfigs] = useState<McpServerConfig[]>([]);
   const [sessionList, setSessionList] = useState<SessionListEntry[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [resumeRequest, setResumeRequest] = useState<
     { kind: "fresh" } | { kind: "resume"; id: string } | null
   >(null);
+
+  // Profile for the current active provider, derived from boot state. Falls
+  // back to Anthropic so legacy code paths (BootBanner, /v1/models fetch)
+  // keep working before the user completes First-Run Welcome in CP6.
+  const activeProfile =
+    (activeProviderId ? getProvider(activeProviderId) : null) ?? anthropicProfile;
+
+  // CP4: Providers panel state + per-session token usage accumulator. The
+  // states map is keyed by provider id; entries materialize when the user
+  // opens Settings and we probe each profile's keychain entry.
+  const [providerStates, setProviderStates] = useState<Record<string, ProviderRowState>>({});
+  const [providerEditId, setProviderEditId] = useState<string | null>(null);
+  const [providerHighlightId, setProviderHighlightId] = useState<string | null>(null);
+  const [providerSaving, setProviderSaving] = useState(false);
+  const [sessionTokens, setSessionTokens] = useState<{
+    in: number;
+    out: number;
+    cached: number;
+  }>({ in: 0, out: 0, cached: 0 });
+  const [contextPercent, setContextPercent] = useState(0);
+  // CP6 First-Run Welcome state. Trigger is the single condition
+  // `settings.main_provider == null` (Parameter 10).
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const [welcomePreselectId, setWelcomePreselectId] = useState<string | null>(null);
+  const [welcomeHasAnyKey, setWelcomeHasAnyKey] = useState(false);
+
+  const providerProfiles = listProviders();
   const sessionRef = useRef<Session | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
@@ -114,6 +141,9 @@ function App() {
     setReady(false);
     setStreaming(false);
     setKeyInput("");
+    setSessionTokens({ in: 0, out: 0, cached: 0 });
+    setContextPercent(0);
+    setSessionStartedAt(null);
     setRebootCounter((c) => c + 1);
   }
 
@@ -131,6 +161,9 @@ function App() {
     setItems([]);
     setReady(false);
     setStreaming(false);
+    setSessionTokens({ in: 0, out: 0, cached: 0 });
+    setContextPercent(0);
+    setSessionStartedAt(null);
     setRebootCounter((c) => c + 1);
   }
 
@@ -140,6 +173,9 @@ function App() {
     setItems([]);
     setReady(false);
     setStreaming(false);
+    setSessionTokens({ in: 0, out: 0, cached: 0 });
+    setContextPercent(0);
+    setSessionStartedAt(null);
     setRebootCounter((c) => c + 1);
   }
 
@@ -173,12 +209,42 @@ function App() {
       setBootError(result.error ?? null);
       setSettings(result.settings);
       setActiveSessionId(result.sessionId);
+      setActiveProviderId(result.activeProviderId);
+      // Resolve created_at for the session row (resumed sessions have a row
+      // already; fresh sessions get a row created lazily on first persist).
+      if (result.sessionId) {
+        try {
+          const row = await getSession(result.sessionId);
+          if (active) setSessionStartedAt(row?.created_at ?? null);
+        } catch {
+          /* boot continues without session-age */
+        }
+      } else {
+        setSessionStartedAt(null);
+      }
       if (result.initialMessages.length > 0) {
         setItems(projectMessagesToChatItems(result.initialMessages));
       }
       void refreshSessionList();
       setReady(true);
       setResumeRequest(null);
+
+      // CP6 Parameter 10: single trigger for First-Run Welcome —
+      // settings.main_provider is null at boot. Keychain state only affects
+      // the Welcome content (pre-selection + copy), never the trigger.
+      if (result.settings.main_provider === null) {
+        const probed = await Promise.all(
+          listProviders().map(async (p) => {
+            const stored = await resolveProviderApiKey(p.secretKey);
+            return stored && stored.length > 0 ? p.id : null;
+          }),
+        );
+        const firstConfigured = probed.find((id) => id !== null) ?? null;
+        if (!active) return;
+        setWelcomePreselectId(firstConfigured);
+        setWelcomeHasAnyKey(firstConfigured !== null);
+        setWelcomeOpen(true);
+      }
 
       for await (const event of result.session.events) {
         if (!active) break;
@@ -239,6 +305,18 @@ function App() {
             );
             setStreaming(false);
             void refreshSessionList();
+            break;
+
+          case "usage":
+            setSessionTokens((prev) => ({
+              in: prev.in + event.inputTokens,
+              out: prev.out + event.outputTokens,
+              cached: prev.cached + (event.cachedInputTokens ?? 0),
+            }));
+            break;
+
+          case "context_usage":
+            setContextPercent(event.percent);
             break;
 
           case "error":
@@ -388,18 +466,33 @@ function App() {
         return updated;
       },
       fetchModels: async () => {
-        const apiKey = await resolveAnthropicApiKey();
+        const apiKey = await resolveProviderApiKey(activeProfile.secretKey);
         if (!apiKey) throw new Error("No API key set. Set your API key first via the gear icon.");
-        if (!anthropicProfile.fetchModels) {
+        if (!activeProfile.fetchModels) {
           throw new Error("Model listing is not available for this provider.");
         }
-        return anthropicProfile.fetchModels(apiKey);
+        return activeProfile.fetchModels(apiKey, settings);
       },
       compactSession: async (focus) => {
         const session = sessionRef.current;
         if (!session) return { error: "No active session." };
         return session.compact(focus);
       },
+      getStatus: () => ({
+        sessionId: activeSessionId,
+        sessionStartedAt,
+        mainProviderId: settings.main_provider,
+        mainModelId: settings.main_model,
+        auxiliaryProviderId: settings.auxiliary_provider,
+        auxiliaryModelId: settings.auxiliary_model,
+        messageCount: items.filter((it) => it.kind === "user-text" || it.kind === "assistant-text")
+          .length,
+        usage: sessionRef.current?.getUsageSnapshot?.() ?? null,
+        lastCompaction: sessionRef.current?.getLastCompaction?.() ?? null,
+        mcpServers: mcpStatuses
+          .filter((s) => s.kind === "connected")
+          .map((s) => ({ id: s.id, toolCount: s.toolCount ?? 0 })),
+      }),
     };
 
     const result = await dispatchInput(trimmed, ctx);
@@ -443,12 +536,13 @@ function App() {
     if (!value || !bootError) return;
     setSaving(true);
     try {
+      const secretKey = activeProfile.secretKey;
       if (bootError.kind === "secure-storage-unavailable") {
-        // Linux fallback: hold key in non-persistent module-level state.
-        setRuntimeKey(value);
+        // Linux fallback: hold key in non-persistent module-level state, keyed by provider.
+        setRuntimeKey(secretKey, value);
       } else {
         // macOS / Windows / Linux with Secret Service: persist via Tauri command.
-        await invoke("set_secret", { key: ANTHROPIC_SECRET_KEY, value });
+        await invoke("set_secret", { key: secretKey, value });
       }
       triggerReboot();
     } catch (err) {
@@ -463,57 +557,70 @@ function App() {
   }
 
   async function handleChangeKey() {
+    const secretKey = activeProfile.secretKey;
     try {
-      await invoke("delete_secret", { key: ANTHROPIC_SECRET_KEY });
+      await invoke("delete_secret", { key: secretKey });
     } catch {
       // ignore — the next boot will surface whatever error
     }
-    clearRuntimeKey();
+    clearRuntimeKey(secretKey);
     triggerReboot();
   }
 
   async function openSettings() {
     setSettingsOpen(true);
-    setAvailableModels(null);
-    setModelsError(null);
-    if (backend !== "anthropic-api") {
-      setModelsError("Set your API key first to fetch available models.");
-      return;
+    void probeProviderStates();
+  }
+
+  // CP6 Parameter 10 final clause: after the user picks, persist
+  // main_provider and deep-link to the Providers panel pre-focused on the
+  // chosen provider — unconditionally, so the user confirms which key is
+  // wired to which provider even when one already exists. When no key is
+  // configured, also open the inline editor; when one already exists, set a
+  // visual highlight (ring + scroll-into-view) so the user can see which
+  // row their existing key is wired to.
+  async function handleWelcomeSelect(providerId: string) {
+    const updated = await saveSettings({ main_provider: providerId });
+    setSettings(updated);
+    setWelcomeOpen(false);
+    await probeProviderStates();
+    if (welcomeHasAnyKey) {
+      setProviderEditId(null);
+      setProviderHighlightId(providerId);
+      // Fade after a few seconds so the ring doesn't linger on subsequent
+      // Settings opens.
+      setTimeout(() => setProviderHighlightId(null), 3500);
+    } else {
+      setProviderEditId(providerId);
+      setProviderHighlightId(null);
     }
-    if (!anthropicProfile.fetchModels) {
-      setModelsError("Model listing is not available for this provider.");
-      return;
-    }
-    setModelsLoading(true);
-    try {
-      const apiKey = await resolveAnthropicApiKey();
-      if (!apiKey) {
-        setModelsError("Set your API key first to fetch available models.");
-        return;
-      }
-      const models = await anthropicProfile.fetchModels(apiKey);
-      setAvailableModels(models);
-    } catch (err) {
-      setModelsError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setModelsLoading(false);
-    }
+    setSettingsOpen(true);
   }
 
   function closeSettings() {
     setSettingsOpen(false);
   }
 
-  async function handleModelChange(newModel: string) {
-    if (newModel === settings.main_model) {
-      closeSettings();
-      return;
-    }
-    const updated = await saveSettings({ main_model: newModel });
+  async function handleMainProviderModelChange(providerId: string, modelId: string) {
+    if (providerId === settings.main_provider && modelId === settings.main_model) return;
+    const updated = await saveSettings({
+      main_provider: providerId,
+      main_model: modelId,
+    });
     setSettings(updated);
-    closeSettings();
-    setToast("Model updated — applies on next session.");
+    setToast(`Main updated — ${providerId} / ${modelId}. Applies on next session.`);
     setTimeout(() => setToast(null), 3500);
+  }
+
+  async function handleAuxiliaryProviderModelChange(providerId: string, modelId: string) {
+    if (providerId === settings.auxiliary_provider && modelId === settings.auxiliary_model) return;
+    const updated = await saveSettings({
+      auxiliary_provider: providerId,
+      auxiliary_model: modelId,
+    });
+    setSettings(updated);
+    setToast(`Auxiliary updated — ${providerId} / ${modelId}.`);
+    setTimeout(() => setToast(null), 2500);
   }
 
   async function handleThemeChange(newThemeId: string) {
@@ -524,18 +631,116 @@ function App() {
     setTimeout(() => setToast(null), 2500);
   }
 
-  async function handleAuxiliaryModelChange(newModel: string) {
-    if (newModel === settings.auxiliary_model) return;
-    const updated = await saveSettings({ auxiliary_model: newModel });
-    setSettings(updated);
-    setToast(`Auxiliary model updated — ${newModel}.`);
-    setTimeout(() => setToast(null), 2500);
-  }
-
   async function handleColorModeChange(newMode: ColorMode) {
     if (newMode === settings.color_mode) return;
     const updated = await saveSettings({ color_mode: newMode });
     setSettings(updated);
+  }
+
+  // CP4: Providers panel handlers. Status is probed lazily — when the modal
+  // first opens we read each profile's keychain entry to materialize the
+  // initial state. Test/Save/Remove keep the in-memory map in sync.
+
+  function previewKey(key: string): string {
+    return `***${key.slice(-4)}`;
+  }
+
+  async function probeProviderStates(): Promise<void> {
+    const entries = await Promise.all(
+      providerProfiles.map(async (p) => {
+        const stored = await resolveProviderApiKey(p.secretKey);
+        if (stored && stored.length > 0) {
+          return [p.id, { status: "configured" as const, preview: previewKey(stored) }] as const;
+        }
+        return [p.id, { status: "not-configured" as const }] as const;
+      }),
+    );
+    setProviderStates(Object.fromEntries(entries));
+  }
+
+  function handleProviderEdit(providerId: string | null) {
+    setProviderEditId(providerId);
+  }
+
+  async function handleProviderSave(providerId: string, key: string) {
+    const profile = getProvider(providerId);
+    if (!profile) return;
+    setProviderSaving(true);
+    try {
+      try {
+        await invoke("set_secret", { key: profile.secretKey, value: key });
+      } catch {
+        // Linux SECURE_STORAGE_UNAVAILABLE fallback — hold in process memory.
+        setRuntimeKey(profile.secretKey, key);
+      }
+      setProviderStates((prev) => ({
+        ...prev,
+        [providerId]: { status: "configured", preview: previewKey(key) },
+      }));
+      setProviderEditId(null);
+    } finally {
+      setProviderSaving(false);
+    }
+  }
+
+  async function handleProviderTest(providerId: string) {
+    const profile = getProvider(providerId);
+    if (!profile) return;
+    const apiKey = await resolveProviderApiKey(profile.secretKey);
+    if (!apiKey) {
+      setProviderStates((prev) => ({
+        ...prev,
+        [providerId]: { status: "not-configured" },
+      }));
+      return;
+    }
+    setProviderStates((prev) => ({
+      ...prev,
+      [providerId]: { ...(prev[providerId] ?? { status: "configured" }), status: "testing" },
+    }));
+    // Force re-discovery on Test so the user gets a true round-trip rather
+    // than a cache hit (the cache was just warmed minutes ago).
+    invalidateDiscovery(providerId);
+    const result = await fetchDiscovery(providerId, apiKey, settings);
+    if (result.status === "ok" && result.models.length > 0) {
+      setProviderStates((prev) => ({
+        ...prev,
+        [providerId]: { status: "configured", preview: previewKey(apiKey) },
+      }));
+    } else if (result.status === "unsupported") {
+      setProviderStates((prev) => ({
+        ...prev,
+        [providerId]: {
+          ...(prev[providerId] ?? { status: "not-configured" }),
+          status: "invalid",
+          testError: "This provider does not support model discovery.",
+        },
+      }));
+    } else {
+      setProviderStates((prev) => ({
+        ...prev,
+        [providerId]: {
+          status: "invalid",
+          preview: previewKey(apiKey),
+          testError: result.error ?? `Test failed (${result.status}).`,
+        },
+      }));
+    }
+  }
+
+  async function handleProviderRemove(providerId: string) {
+    const profile = getProvider(providerId);
+    if (!profile) return;
+    try {
+      await invoke("delete_secret", { key: profile.secretKey });
+    } catch {
+      // ignore — runtime-key removal below also covers Linux fallback
+    }
+    clearRuntimeKey(profile.secretKey);
+    setProviderStates((prev) => ({
+      ...prev,
+      [providerId]: { status: "not-configured" },
+    }));
   }
 
   async function handleMcpAdd(config: McpServerConfig) {
@@ -596,7 +801,7 @@ function App() {
     hasPendingApproval ||
     (backend === "echo-fallback" && bootError !== null);
   const activityLabel = !ready ? "Connecting…" : streaming ? "Streaming…" : "Ready";
-  const COMMAND_HINTS = ["/help", "/clear", "/model", "/compact"];
+  const COMMAND_HINTS = ["/help", "/status", "/clear", "/model", "/compact"];
 
   return (
     <main className="flex h-screen bg-background text-foreground">
@@ -640,7 +845,9 @@ function App() {
             setKeyInput={setKeyInput}
             onSave={handleSaveKey}
             onRetry={triggerReboot}
+            onOpenProviders={openSettings}
             saving={saving}
+            providerLabel={activeProfile.label}
           />
         ) : null}
 
@@ -665,9 +872,11 @@ function App() {
 
         <StatusBar
           brand="delphy-agent"
-          model={settings.main_model}
+          model={settings.main_model ?? activeProfile.defaultModel}
           activity={activityLabel}
           commandHints={COMMAND_HINTS}
+          tokens={sessionTokens}
+          contextPercent={contextPercent}
         />
 
         <form
@@ -698,24 +907,41 @@ function App() {
           </Button>
         </form>
 
+        <FirstRunWelcome
+          open={welcomeOpen}
+          profiles={providerProfiles}
+          preselectId={welcomePreselectId}
+          hasAnyKey={welcomeHasAnyKey}
+          onSelect={handleWelcomeSelect}
+        />
+
         <SettingsModal
           open={settingsOpen}
           onOpenChange={(open) => (open ? openSettings() : closeSettings())}
+          settings={settings}
+          currentMainProvider={settings.main_provider}
           currentModel={settings.main_model}
+          currentAuxiliaryProvider={settings.auxiliary_provider}
           currentAuxiliaryModel={settings.auxiliary_model}
-          availableModels={availableModels}
-          modelsLoading={modelsLoading}
-          modelsError={modelsError}
           themes={themes}
           selectedThemeId={settings.selected_theme}
           colorMode={settings.color_mode}
           mcpStatuses={mcpStatuses}
           mcpConfigs={mcpConfigs}
-          onSelectModel={handleModelChange}
-          onSelectAuxiliaryModel={handleAuxiliaryModelChange}
+          providerProfiles={providerProfiles}
+          providerStates={providerStates}
+          providerEditId={providerEditId}
+          providerHighlightId={providerHighlightId}
+          providerSaving={providerSaving}
+          resolveApiKey={resolveProviderApiKey}
+          onProviderEdit={handleProviderEdit}
+          onProviderSave={handleProviderSave}
+          onProviderTest={handleProviderTest}
+          onProviderRemove={handleProviderRemove}
+          onMainProviderModelChange={handleMainProviderModelChange}
+          onAuxiliaryProviderModelChange={handleAuxiliaryProviderModelChange}
           onThemeChange={handleThemeChange}
           onColorModeChange={handleColorModeChange}
-          onRetry={openSettings}
           onMcpAdd={handleMcpAdd}
           onMcpEdit={handleMcpEdit}
           onMcpRemove={handleMcpRemove}
@@ -740,7 +966,9 @@ function BootBanner({
   setKeyInput,
   onSave,
   onRetry,
+  onOpenProviders,
   saving,
+  providerLabel,
 }: {
   errorKind: BootErrorKind;
   errorMessage: string;
@@ -748,7 +976,9 @@ function BootBanner({
   setKeyInput: (v: string) => void;
   onSave: () => void;
   onRetry: () => void;
+  onOpenProviders: () => void;
   saving: boolean;
+  providerLabel: string;
 }) {
   if (errorKind === "unknown") {
     return (
@@ -769,7 +999,7 @@ function BootBanner({
       <div className="font-medium">
         {isLinuxFallback
           ? "Secure storage unavailable — session-only key required"
-          : "Anthropic API key needed"}
+          : `${providerLabel} API key needed`}
       </div>
       <div className="mt-1 text-xs text-muted-foreground">
         {isLinuxFallback ? (
@@ -780,17 +1010,9 @@ function BootBanner({
           </>
         ) : (
           <>
-            Get a key at{" "}
-            <a
-              href="https://console.anthropic.com/"
-              target="_blank"
-              rel="noreferrer"
-              className="underline"
-            >
-              console.anthropic.com
-            </a>
-            . It's stored in your OS keychain (macOS Keychain / Windows Credential Manager / Linux
-            Secret Service).
+            Enter the key inline below, or open Settings → Providers to manage keys for all
+            registered providers. Keys are stored in your OS keychain (macOS Keychain / Windows
+            Credential Manager / Linux Secret Service).
           </>
         )}
       </div>
@@ -807,13 +1029,18 @@ function BootBanner({
           spellCheck="false"
           value={keyInput}
           onChange={(e) => setKeyInput(e.currentTarget.value)}
-          placeholder="sk-ant-..."
+          placeholder={`${providerLabel} API key`}
           disabled={saving}
           className="flex-1 rounded border border-border bg-background px-3 py-1 text-xs text-foreground focus:border-primary focus:outline-none disabled:opacity-50"
         />
         <Button type="submit" size="sm" disabled={saving || keyInput.trim().length === 0}>
           {saving ? "Saving..." : isLinuxFallback ? "Use for session" : "Save"}
         </Button>
+        {!isLinuxFallback ? (
+          <Button type="button" size="sm" variant="outline" onClick={onOpenProviders}>
+            Open Providers
+          </Button>
+        ) : null}
       </form>
     </div>
   );

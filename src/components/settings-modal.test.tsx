@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_SETTINGS } from "@/core/settings/defaults";
 import type { Theme } from "@/themes/types";
 import { SettingsModal } from "./settings-modal";
 
@@ -38,30 +39,37 @@ const fakeThemes: Theme[] = [
 
 function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModal>> = {}) {
   const onOpenChange = vi.fn();
-  const onSelectModel = vi.fn();
-  const onSelectAuxiliaryModel = vi.fn();
+  const onMainProviderModelChange = vi.fn();
+  const onAuxiliaryProviderModelChange = vi.fn();
   const onThemeChange = vi.fn();
   const onColorModeChange = vi.fn();
-  const onRetry = vi.fn();
   render(
     <SettingsModal
       open
       onOpenChange={onOpenChange}
+      settings={DEFAULT_SETTINGS}
+      currentMainProvider="anthropic"
       currentModel="claude-sonnet-4-6"
+      currentAuxiliaryProvider="anthropic"
       currentAuxiliaryModel="claude-haiku-4-5"
-      availableModels={["claude-sonnet-4-6", "claude-haiku-4-5"]}
-      modelsLoading={false}
-      modelsError={null}
       themes={fakeThemes}
       selectedThemeId="perpetuity"
       colorMode="dark"
       mcpStatuses={[]}
       mcpConfigs={[]}
-      onSelectModel={onSelectModel}
-      onSelectAuxiliaryModel={onSelectAuxiliaryModel}
+      providerProfiles={[]}
+      providerStates={{}}
+      providerEditId={null}
+      providerSaving={false}
+      resolveApiKey={vi.fn(async () => null)}
+      onProviderEdit={vi.fn()}
+      onProviderSave={vi.fn()}
+      onProviderTest={vi.fn()}
+      onProviderRemove={vi.fn()}
+      onMainProviderModelChange={onMainProviderModelChange}
+      onAuxiliaryProviderModelChange={onAuxiliaryProviderModelChange}
       onThemeChange={onThemeChange}
       onColorModeChange={onColorModeChange}
-      onRetry={onRetry}
       onMcpAdd={vi.fn()}
       onMcpEdit={vi.fn()}
       onMcpRemove={vi.fn()}
@@ -72,11 +80,10 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
   );
   return {
     onOpenChange,
-    onSelectModel,
-    onSelectAuxiliaryModel,
+    onMainProviderModelChange,
+    onAuxiliaryProviderModelChange,
     onThemeChange,
     onColorModeChange,
-    onRetry,
   };
 }
 
@@ -91,22 +98,13 @@ describe("SettingsModal", () => {
     expect(screen.getAllByRole("radio")).toHaveLength(3);
   });
 
-  it("changing the Auxiliary model Select fires onSelectAuxiliaryModel with the new id", async () => {
-    const user = userEvent.setup();
-    const { onSelectAuxiliaryModel } = renderModal();
-
-    const auxTrigger = screen.getByLabelText(/^auxiliary model$/i);
-    await user.click(auxTrigger);
-    // The other available model ("claude-sonnet-4-6") appears as an option in
-    // the auxiliary picker — pick it (different from the default current value
-    // "claude-haiku-4-5" so we exercise the change path). Radix renders only
-    // the active SelectContent's options, so findByRole (singular) is unique.
-    const sonnetOption = await screen.findByRole("option", { name: /claude-sonnet-4-6/i });
-    await user.click(sonnetOption);
-
-    await waitFor(() => {
-      expect(onSelectAuxiliaryModel).toHaveBeenCalledWith("claude-sonnet-4-6");
-    });
+  it("renders the new Main + Auxiliary (Provider, Model) picker pairs", () => {
+    renderModal();
+    // ProviderModelPicker renders Provider + Model selects per tier.
+    expect(screen.getByLabelText(/main provider/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^main model$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/auxiliary provider/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^auxiliary model$/i)).toBeInTheDocument();
   });
 
   it("changing the theme Select fires onThemeChange with the new id", async () => {
@@ -164,8 +162,8 @@ describe("SettingsModal", () => {
     renderModal();
     await user.click(screen.getByText("Add server"));
     expect(screen.getByText("Add MCP server")).toBeInTheDocument();
-    expect(screen.getByLabelText(/id/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/command/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/ID \(lowercase/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^command$/i)).toBeInTheDocument();
   });
 
   it("form validates required fields and shows errors", async () => {

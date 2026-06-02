@@ -13,7 +13,7 @@ import { AuxiliaryClient } from "../llm/auxiliary";
 import { mcpManager } from "../mcp/manager";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
 import { getProvider } from "../providers";
-import { getRuntimeKey } from "../providers/anthropic-runtime-key";
+import { getRuntimeKey } from "../providers/runtime-keys";
 import { compactMessages, DEFAULT_COMPACTOR_CONFIG } from "../session/compactor";
 import type {
   AgentEvent,
@@ -26,7 +26,10 @@ import type {
   SessionOptions,
 } from "../types";
 
-const PROVIDER_ID = "anthropic";
+// Default provider id when SessionOptions.providerId is unset (a legacy
+// caller path or a test fixture not yet updated). The boot helper resolves
+// the real provider from settings.main_provider per Parameter 10a.
+const DEFAULT_PROVIDER_ID = "anthropic";
 
 const CHARS_PER_TOKEN_ANTHROPIC = 3.5;
 const CONTEXT_LIMIT_TOKENS = 200_000;
@@ -77,20 +80,20 @@ async function resolveApiKey(secretKey: string): Promise<{ key: string } | { err
     if (stored && stored.length > 0) {
       return { key: stored };
     }
-    const runtime = getRuntimeKey();
+    const runtime = getRuntimeKey(secretKey);
     if (runtime && runtime.length > 0) {
       return { key: runtime };
     }
     return {
       error: new BootError(
         "missing-key",
-        "No Anthropic API key found in keychain or runtime memory.",
+        `No API key found in keychain or runtime memory for "${secretKey}".`,
       ),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.startsWith("SECURE_STORAGE_UNAVAILABLE:")) {
-      const runtime = getRuntimeKey();
+      const runtime = getRuntimeKey(secretKey);
       if (runtime && runtime.length > 0) {
         return { key: runtime };
       }
@@ -258,15 +261,32 @@ class DirectApiSession implements Session {
   private readonly systemPrompt: string;
   private persistedCount = 0;
 
+  private readonly providerId: string;
   private readonly apiKey: string;
   private readonly modelId: string;
+  private readonly auxiliaryProviderId: string;
+  private readonly auxiliaryApiKey: string;
   private readonly auxiliaryModelId: string;
   private readonly persister?: MessagePersister;
 
   private currentAbort: AbortController | null = null;
 
   private lastCompactionSavedRatio: number | null = null;
+  private lastCompactionMetrics: {
+    before: number;
+    after: number;
+    tokensSaved: number;
+    at: number;
+  } | null = null;
   private compactionInFlight = false;
+
+  // Per-session token usage accumulator (Parameter 16 of the multi-provider
+  // plan). Populated from the streamText `usage` event after each turn,
+  // surfaced via the `usage` AgentEvent and used by `/status` (Parameter 17).
+  private totalInputTokens = 0;
+  private totalOutputTokens = 0;
+  private totalCachedInputTokens = 0;
+  private totalTurns = 0;
 
   private turnState: TurnState = "idle";
   private pendingApprovals = new Map<string, PendingApproval>();
@@ -280,11 +300,17 @@ class DirectApiSession implements Session {
     initialMessages: ModelMessage[] = [],
     initialMemory = "",
     persister?: MessagePersister,
+    providerId: string = DEFAULT_PROVIDER_ID,
+    auxiliaryProviderId?: string,
+    auxiliaryApiKey?: string,
   ) {
     this.id = id;
     this.apiKey = apiKey;
     this.modelId = modelId;
     this.auxiliaryModelId = auxiliaryModelId;
+    this.providerId = providerId;
+    this.auxiliaryProviderId = auxiliaryProviderId ?? providerId;
+    this.auxiliaryApiKey = auxiliaryApiKey ?? apiKey;
     this.messages = [...initialMessages];
     this.persistedCount = this.messages.length;
     this.persister = persister;
@@ -380,11 +406,11 @@ class DirectApiSession implements Session {
       });
     }
 
-    const profile = getProvider(PROVIDER_ID);
+    const profile = getProvider(this.providerId);
     if (!profile) {
       this.emitEvent({
         type: "error",
-        error: new Error("Anthropic provider not found in registry"),
+        error: new Error(`Provider "${this.providerId}" not found in registry`),
         kind: "unknown",
       });
       this.emitEvent({ type: "done", reason: "error" });
@@ -575,10 +601,33 @@ class DirectApiSession implements Session {
     await this.flushPersist();
 
     const usage = await result.usage;
+    const inputTokens = usage.inputTokens ?? 0;
+    const outputTokens = usage.outputTokens ?? 0;
+    // Anthropic surfaces cached-input via `cachedInputTokens` on the
+    // standard usage object in Vercel AI SDK 6.x. Other providers may emit 0
+    // or undefined; treat as 0.
+    const cachedInputTokens = (usage as { cachedInputTokens?: number }).cachedInputTokens ?? 0;
+
+    this.totalInputTokens += inputTokens;
+    this.totalOutputTokens += outputTokens;
+    this.totalCachedInputTokens += cachedInputTokens;
+    this.totalTurns += 1;
+
     this.emitEvent({
       type: "usage",
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens,
+    });
+
+    // Live context-% indicator for the StatusBar (Parameter 16). Recomputed
+    // from the current in-memory messages + system prompt.
+    const ctxTokens = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
+    this.emitEvent({
+      type: "context_usage",
+      tokensUsed: ctxTokens,
+      limit: CONTEXT_LIMIT_TOKENS,
+      percent: clampRatio(ctxTokens / CONTEXT_LIMIT_TOKENS),
     });
 
     if (finishReason === "tool-calls" && this.pendingApprovals.size > 0) {
@@ -586,6 +635,35 @@ class DirectApiSession implements Session {
     }
 
     return { outcome: "done", finishReason };
+  }
+
+  /**
+   * Snapshot of cumulative session usage. Consumed by `/status` (Parameter
+   * 17) via `CommandContext.getStatus()` in CP6.
+   */
+  getUsageSnapshot(): {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    turns: number;
+    contextTokens: number;
+    contextLimit: number;
+    contextPercent: number;
+  } {
+    const ctxTokens = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
+    return {
+      inputTokens: this.totalInputTokens,
+      outputTokens: this.totalOutputTokens,
+      cachedInputTokens: this.totalCachedInputTokens,
+      turns: this.totalTurns,
+      contextTokens: ctxTokens,
+      contextLimit: CONTEXT_LIMIT_TOKENS,
+      contextPercent: clampRatio(ctxTokens / CONTEXT_LIMIT_TOKENS),
+    };
+  }
+
+  getLastCompaction() {
+    return this.lastCompactionMetrics;
   }
 
   async respondToApproval(id: string, allowed: boolean): Promise<void> {
@@ -667,7 +745,8 @@ class DirectApiSession implements Session {
     try {
       const preTotalTokens = estimateMessageTokens(this.messages);
       const aux = new AuxiliaryClient({
-        apiKey: this.apiKey,
+        providerId: this.auxiliaryProviderId,
+        apiKey: this.auxiliaryApiKey,
         modelId: this.auxiliaryModelId,
       });
       const result = await compactMessages({
@@ -688,6 +767,12 @@ class DirectApiSession implements Session {
       this.lastCompactionSavedRatio = clampRatio(
         result.metrics.estimatedTokensSaved / Math.max(1, preTotalTokens),
       );
+      this.lastCompactionMetrics = {
+        before: result.metrics.before,
+        after: result.metrics.after,
+        tokensSaved: result.metrics.estimatedTokensSaved,
+        at: Date.now(),
+      };
       this.emitEvent({
         type: "system_message",
         text: `Auto-compacted: ${result.metrics.before} → ${result.metrics.after} messages, ~${result.metrics.estimatedTokensSaved.toLocaleString()} tokens saved.`,
@@ -708,7 +793,8 @@ class DirectApiSession implements Session {
     try {
       const preTotalTokens = estimateMessageTokens(this.messages);
       const aux = new AuxiliaryClient({
-        apiKey: this.apiKey,
+        providerId: this.auxiliaryProviderId,
+        apiKey: this.auxiliaryApiKey,
         modelId: this.auxiliaryModelId,
       });
       const result = await compactMessages({
@@ -729,6 +815,12 @@ class DirectApiSession implements Session {
       this.lastCompactionSavedRatio = clampRatio(
         result.metrics.estimatedTokensSaved / Math.max(1, preTotalTokens),
       );
+      this.lastCompactionMetrics = {
+        before: result.metrics.before,
+        after: result.metrics.after,
+        tokensSaved: result.metrics.estimatedTokensSaved,
+        at: Date.now(),
+      };
       return {
         before: result.metrics.before,
         after: result.metrics.after,
@@ -750,29 +842,70 @@ function clampRatio(value: number): number {
 let sessionCounter = 0;
 
 export const directApiAdapter: BackendAdapter = {
+  // Identifier stays "anthropic-api" for back-compat with existing
+  // sessions.backend_id rows in SQLite (BACKLOG #4 shipped with this value).
+  // Despite the name, the adapter is polymorphic — opts.providerId picks
+  // the active ProviderProfile per session.
   id: "anthropic-api",
   kind: "direct-api",
-  label: "Anthropic (Claude)",
+  label: "Direct API",
 
   async start(opts: SessionOptions): Promise<Session> {
-    const profile = getProvider(PROVIDER_ID);
+    const providerId = opts.providerId ?? DEFAULT_PROVIDER_ID;
+    const profile = getProvider(providerId);
     if (!profile) {
-      throw new BootError("unknown", `Provider "${PROVIDER_ID}" not registered`);
+      throw new BootError("unknown", `Provider "${providerId}" not registered`);
     }
     const resolved = await resolveApiKey(profile.secretKey);
     if ("error" in resolved) {
       throw resolved.error;
     }
+
+    // Auxiliary provider/key resolution (Parameter 12 of the multi-provider
+    // plan): if no auxiliaryProviderId set, fall back to main; if it IS set
+    // and differs from main, resolve its own keychain entry. A failed
+    // auxiliary key resolution does not block boot — the auxiliary client
+    // surfaces it lazily when first invoked.
+    let auxProviderId = opts.auxiliaryProviderId ?? providerId;
+    let auxApiKey = resolved.key;
+    if (auxProviderId !== providerId) {
+      const auxProfile = getProvider(auxProviderId);
+      if (auxProfile) {
+        const auxResolved = await resolveApiKey(auxProfile.secretKey);
+        if ("error" in auxResolved) {
+          // Auxiliary key missing — fall back to main provider + key. The
+          // user will see compaction skip with a helpful message if/when it
+          // fires (per existing runAutoCompaction error handling).
+          auxProviderId = providerId;
+        } else {
+          auxApiKey = auxResolved.key;
+        }
+      } else {
+        auxProviderId = providerId;
+      }
+    }
+
+    // Per the BACKLOG #12.A build refinement: each profile can declare a
+    // `defaultAuxiliaryModel` so the cheap-aux default isn't hardcoded to
+    // Claude Haiku here. We resolve via the auxiliary profile (falls back
+    // to the main profile when aux === main, which is the common case).
+    const auxProfile = getProvider(auxProviderId) ?? profile;
+    const auxModel =
+      opts.auxiliaryModelId ?? auxProfile.defaultAuxiliaryModel ?? auxProfile.defaultModel;
+
     sessionCounter += 1;
     const id = opts.sessionId ?? `direct-api-${sessionCounter}`;
     return new DirectApiSession(
       id,
       resolved.key,
       opts.modelId ?? profile.defaultModel,
-      opts.auxiliaryModelId ?? "claude-haiku-4-5",
+      auxModel,
       (opts.initialMessages ?? []) as ModelMessage[],
       opts.initialMemory ?? "",
       opts.persister,
+      providerId,
+      auxProviderId,
+      auxApiKey,
     );
   },
 };

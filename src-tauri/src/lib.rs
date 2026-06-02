@@ -10,12 +10,20 @@ pub fn run() {
         eprintln!("warning: keyring native store init failed: {e}");
     }
 
-    let sql_migrations = vec![Migration {
-        version: 1,
-        description: "initial schema: sessions, messages, messages_fts, memory, mcp_servers",
-        sql: include_str!("../migrations/001_initial.sql"),
-        kind: MigrationKind::Up,
-    }];
+    let sql_migrations = vec![
+        Migration {
+            version: 1,
+            description: "initial schema: sessions, messages, messages_fts, memory, mcp_servers",
+            sql: include_str!("../migrations/001_initial.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "multi-provider: add sessions.main_provider column, backfill anthropic",
+            sql: include_str!("../migrations/002_multi_provider.sql"),
+            kind: MigrationKind::Up,
+        },
+    ];
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

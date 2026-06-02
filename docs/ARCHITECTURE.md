@@ -166,11 +166,11 @@ type AgentEvent =
 - Maps Codex item types (`agent_message`, `reasoning`, `command_execution`, `file_change`, `mcp_tool_call`, `web_search`, `plan_update`) to our event types
 - `interrupt()` → asks Rust to send SIGTERM
 
-**`direct-api.ts`** — wraps Vercel AI SDK v5:
-- Switches on `id` to pick the right provider (`anthropic`, `openai`, `google`, OpenAI-compatible endpoints like Kimi/Groq/etc.)
-- Uses `streamText({ model, messages, tools, ... })` and translates streaming chunks into `AgentEvent`s
+**`direct-api.ts`** — wraps Vercel AI SDK v6:
+- Resolves a `ProviderProfile` from `src/core/providers/` (shipped: `anthropic`, `openai`, `google`, `xai`, `openai-compatible` for Kimi/DeepSeek/OpenRouter/etc.) for both the main and auxiliary tier. The auxiliary default resolves `defaultAuxiliaryModel ?? defaultModel` of the auxiliary profile (no hardcoded model). Each profile carries a `pricing` table + a `discoveryFingerprint` for the 5-minute model-discovery cache (`providers/discovery-cache.ts`).
+- Uses `streamText({ model, messages, tools, ... })` and translates streaming chunks into `AgentEvent`s; accumulates per-session token usage and emits a `context_usage` event each turn (surfaced by the StatusBar + `/status`).
 - Tool list is composed from connected MCP servers (see MCP section)
-- API keys are pulled from secret store via a Tauri command; never live in the React state
+- API keys are pulled from secret store via a Tauri command, keyed per profile (`profile.secretKey`); never live in the React state
 
 ### Adapter registry
 
@@ -266,6 +266,7 @@ sessions(
   id TEXT PRIMARY KEY,
   backend_id TEXT NOT NULL,
   main_model TEXT,                  -- added 2026-05-30: enables resume-vs-fresh decision
+  main_provider TEXT,               -- added 2026-06-02 (migration 002): resume requires (backend_id, main_provider, main_model) to match
   title TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,

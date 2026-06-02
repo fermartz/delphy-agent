@@ -3,6 +3,7 @@ import { getDb } from "./init";
 export interface SessionRow {
   id: string;
   backend_id: string;
+  main_provider: string | null;
   main_model: string | null;
   title: string | null;
   created_at: number;
@@ -13,6 +14,7 @@ export interface SessionRow {
 export interface SessionListEntry {
   id: string;
   backend_id: string;
+  main_provider: string | null;
   main_model: string | null;
   title: string | null;
   created_at: number;
@@ -22,15 +24,24 @@ export interface SessionListEntry {
 export async function createSession(input: {
   id: string;
   backend_id: string;
+  main_provider: string;
   main_model: string | null;
   title?: string | null;
 }): Promise<void> {
   const db = await getDb();
   const now = Date.now();
   await db.execute(
-    `INSERT INTO sessions (id, backend_id, main_model, title, created_at, updated_at, archived)
-     VALUES (?, ?, ?, ?, ?, ?, 0)`,
-    [input.id, input.backend_id, input.main_model, input.title ?? null, now, now],
+    `INSERT INTO sessions (id, backend_id, main_provider, main_model, title, created_at, updated_at, archived)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+    [
+      input.id,
+      input.backend_id,
+      input.main_provider,
+      input.main_model,
+      input.title ?? null,
+      now,
+      now,
+    ],
   );
 }
 
@@ -51,7 +62,7 @@ export async function updateSessionTitle(id: string, title: string): Promise<voi
 export async function getMostRecentSession(): Promise<SessionRow | null> {
   const db = await getDb();
   const rows = await db.select<SessionRow>(
-    `SELECT id, backend_id, main_model, title, created_at, updated_at, archived
+    `SELECT id, backend_id, main_provider, main_model, title, created_at, updated_at, archived
      FROM sessions
      WHERE archived = 0
      ORDER BY updated_at DESC
@@ -63,7 +74,7 @@ export async function getMostRecentSession(): Promise<SessionRow | null> {
 export async function listSessions(): Promise<SessionListEntry[]> {
   const db = await getDb();
   return db.select<SessionListEntry>(
-    `SELECT id, backend_id, main_model, title, created_at, updated_at
+    `SELECT id, backend_id, main_provider, main_model, title, created_at, updated_at
      FROM sessions
      WHERE archived = 0
      ORDER BY updated_at DESC`,
@@ -73,7 +84,7 @@ export async function listSessions(): Promise<SessionListEntry[]> {
 export async function getSession(id: string): Promise<SessionRow | null> {
   const db = await getDb();
   const rows = await db.select<SessionRow>(
-    `SELECT id, backend_id, main_model, title, created_at, updated_at, archived
+    `SELECT id, backend_id, main_provider, main_model, title, created_at, updated_at, archived
      FROM sessions WHERE id = ?`,
     [id],
   );

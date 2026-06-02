@@ -22,6 +22,10 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
 function isColorMode(value: unknown): value is ColorMode {
   return isString(value) && (VALID_COLOR_MODES as readonly string[]).includes(value);
 }
@@ -32,10 +36,6 @@ async function readField<T>(
   validate: (v: unknown) => v is T,
 ): Promise<{ found: true; value: T } | { found: false; invalid: boolean }> {
   const raw = await store.get<unknown>(key);
-  // Only `undefined` means the key is absent. An explicit `null` (or any other
-  // value) must pass through the validator — the spec says invalid persisted
-  // values warn + fall back, and `null` is invalid for every Settings field
-  // (all string-typed after window_state's removal).
   if (raw === undefined) {
     return { found: false, invalid: false };
   }
@@ -69,11 +69,20 @@ export async function loadSettings(): Promise<Settings> {
   const backend = await readField(store, "default_backend", isString);
   if (backend.found) settings.default_backend = backend.value;
 
-  const main = await readField(store, "main_model", isString);
+  const mainProvider = await readField(store, "main_provider", isNullableString);
+  if (mainProvider.found) settings.main_provider = mainProvider.value;
+
+  const main = await readField(store, "main_model", isNullableString);
   if (main.found) settings.main_model = main.value;
 
-  const aux = await readField(store, "auxiliary_model", isString);
+  const auxProvider = await readField(store, "auxiliary_provider", isNullableString);
+  if (auxProvider.found) settings.auxiliary_provider = auxProvider.value;
+
+  const aux = await readField(store, "auxiliary_model", isNullableString);
   if (aux.found) settings.auxiliary_model = aux.value;
+
+  const baseUrl = await readField(store, "openai_compatible_base_url", isNullableString);
+  if (baseUrl.found) settings.openai_compatible_base_url = baseUrl.value;
 
   return settings;
 }

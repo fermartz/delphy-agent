@@ -21,6 +21,7 @@ export interface ResolvedSessionContext {
 
 interface CreationMeta {
   backendId: string;
+  mainProvider: string;
   mainModel: string;
 }
 
@@ -34,6 +35,7 @@ interface CreationMeta {
  */
 export async function resolveSessionContext(input: {
   backendId: string;
+  mainProvider: string;
   mainModel: string;
 }): Promise<ResolvedSessionContext> {
   try {
@@ -44,7 +46,12 @@ export async function resolveSessionContext(input: {
 
   try {
     const recent = await getMostRecentSession();
-    if (recent && recent.backend_id === input.backendId && recent.main_model === input.mainModel) {
+    if (
+      recent &&
+      recent.backend_id === input.backendId &&
+      recent.main_provider === input.mainProvider &&
+      recent.main_model === input.mainModel
+    ) {
       const initialMessages = await loadMessages(recent.id);
       return {
         sessionId: recent.id,
@@ -63,6 +70,7 @@ export async function resolveSessionContext(input: {
     initialMessages: [],
     persister: makePersister(sessionId, {
       backendId: input.backendId,
+      mainProvider: input.mainProvider,
       mainModel: input.mainModel,
     }),
     resumed: false,
@@ -71,6 +79,7 @@ export async function resolveSessionContext(input: {
 
 export async function createFreshSession(input: {
   backendId: string;
+  mainProvider: string;
   mainModel: string;
 }): Promise<ResolvedSessionContext> {
   const sessionId = nextSessionId();
@@ -79,6 +88,7 @@ export async function createFreshSession(input: {
     initialMessages: [],
     persister: makePersister(sessionId, {
       backendId: input.backendId,
+      mainProvider: input.mainProvider,
       mainModel: input.mainModel,
     }),
     resumed: false,
@@ -112,6 +122,7 @@ function makePersister(sessionId: string, creationMeta?: CreationMeta): MessageP
         await createSession({
           id: sessionId,
           backend_id: creationMeta.backendId,
+          main_provider: creationMeta.mainProvider,
           main_model: creationMeta.mainModel,
         });
         created = true;

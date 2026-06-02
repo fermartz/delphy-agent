@@ -27,21 +27,33 @@ describe("AuxiliaryClient", () => {
   it("returns text on a successful complete() call", async () => {
     // biome-ignore lint/suspicious/noExplicitAny: mock factory ergonomics
     mockedGenerateText.mockResolvedValueOnce({ text: "summarized output" } as any);
-    const client = new AuxiliaryClient({ apiKey: "sk-ant-test", modelId: "claude-haiku-4-5" });
+    const client = new AuxiliaryClient({
+      providerId: "anthropic",
+      apiKey: "sk-ant-test",
+      modelId: "claude-haiku-4-5",
+    });
     const result = await client.complete("summarize this");
     expect(result).toBe("summarized output");
   });
 
   it("throws when generateText fails", async () => {
     mockedGenerateText.mockRejectedValueOnce(new Error("upstream failure"));
-    const client = new AuxiliaryClient({ apiKey: "sk-ant-test", modelId: "claude-haiku-4-5" });
+    const client = new AuxiliaryClient({
+      providerId: "anthropic",
+      apiKey: "sk-ant-test",
+      modelId: "claude-haiku-4-5",
+    });
     await expect(client.complete("summarize this")).rejects.toThrow("upstream failure");
   });
 
-  it("passes systemPrompt and the browser-access header to generateText", async () => {
+  it("passes systemPrompt and the profile-supplied headers to generateText", async () => {
     // biome-ignore lint/suspicious/noExplicitAny: mock factory ergonomics
     mockedGenerateText.mockResolvedValueOnce({ text: "ok" } as any);
-    const client = new AuxiliaryClient({ apiKey: "sk-ant-test", modelId: "claude-haiku-4-5" });
+    const client = new AuxiliaryClient({
+      providerId: "anthropic",
+      apiKey: "sk-ant-test",
+      modelId: "claude-haiku-4-5",
+    });
     await client.complete("user prompt", { systemPrompt: "you are a summarizer" });
 
     const callArgs = mockedGenerateText.mock.calls[0][0];
@@ -50,5 +62,16 @@ describe("AuxiliaryClient", () => {
     expect(callArgs.headers).toMatchObject({
       "anthropic-dangerous-direct-browser-access": "true",
     });
+  });
+
+  it("throws when the provided providerId is not registered", () => {
+    expect(
+      () =>
+        new AuxiliaryClient({
+          providerId: "nonexistent",
+          apiKey: "k",
+          modelId: "m",
+        }),
+    ).toThrow(/not found in registry/);
   });
 });

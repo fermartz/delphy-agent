@@ -17,6 +17,9 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.79",
+    "@ai-sdk/google": "^3.0.80",
+    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/xai": "^3.0.93",
     "@fontsource-variable/geist": "^5.2.9",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",

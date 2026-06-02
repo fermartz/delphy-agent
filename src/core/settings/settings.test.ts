@@ -102,17 +102,40 @@ describe("settings module", () => {
     expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("treats explicit null as invalid for string fields (warns + defaults)", async () => {
+  it("treats explicit null as invalid for non-nullable string fields (warns + defaults)", async () => {
+    // Per BACKLOG #12.A Parameter 10a: main_provider / main_model /
+    // auxiliary_provider / auxiliary_model are nullable, so explicit null
+    // is VALID. Non-nullable string fields (default_backend, selected_theme,
+    // $schema) still warn on null.
     resetMocks({
-      main_model: null,
       default_backend: null,
+      selected_theme: null,
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     warnSpy.mockClear();
     const settings = await loadSettings();
-    expect(settings.main_model).toBe(DEFAULT_SETTINGS.main_model);
     expect(settings.default_backend).toBe(DEFAULT_SETTINGS.default_backend);
+    expect(settings.selected_theme).toBe(DEFAULT_SETTINGS.selected_theme);
     expect(warnSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts explicit null for nullable provider/model fields (Parameter 10a)", async () => {
+    resetMocks({
+      main_provider: null,
+      main_model: null,
+      auxiliary_provider: null,
+      auxiliary_model: null,
+      openai_compatible_base_url: null,
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warnSpy.mockClear();
+    const settings = await loadSettings();
+    expect(settings.main_provider).toBe(null);
+    expect(settings.main_model).toBe(null);
+    expect(settings.auxiliary_provider).toBe(null);
+    expect(settings.auxiliary_model).toBe(null);
+    expect(settings.openai_compatible_base_url).toBe(null);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("returns defaults when the underlying store fails to load (corrupted file path)", async () => {

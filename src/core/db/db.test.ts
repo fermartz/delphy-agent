@@ -38,6 +38,7 @@ describe("db", () => {
       await createSession({
         id: "s1",
         backend_id: "anthropic-api",
+        main_provider: "anthropic",
         main_model: "claude-sonnet-4-6",
       });
       const row = await getSession("s1");
@@ -52,15 +53,30 @@ describe("db", () => {
     });
 
     it("getMostRecentSession returns the most recently updated", async () => {
-      await createSession({ id: "s1", backend_id: "anthropic-api", main_model: "m1" });
+      await createSession({
+        id: "s1",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m1",
+      });
       await new Promise((r) => setTimeout(r, 5));
-      await createSession({ id: "s2", backend_id: "anthropic-api", main_model: "m2" });
+      await createSession({
+        id: "s2",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m2",
+      });
       const most = await getMostRecentSession();
       expect(most?.id).toBe("s2");
     });
 
     it("touchSession updates updated_at", async () => {
-      await createSession({ id: "s1", backend_id: "anthropic-api", main_model: "m1" });
+      await createSession({
+        id: "s1",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m1",
+      });
       const before = (await getSession("s1"))?.updated_at ?? 0;
       await new Promise((r) => setTimeout(r, 5));
       await touchSession("s1");
@@ -69,24 +85,54 @@ describe("db", () => {
     });
 
     it("updateSessionTitle persists title", async () => {
-      await createSession({ id: "s1", backend_id: "anthropic-api", main_model: "m1" });
+      await createSession({
+        id: "s1",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m1",
+      });
       await updateSessionTitle("s1", "My chat");
       const row = await getSession("s1");
       expect(row?.title).toBe("My chat");
     });
 
     it("listSessions returns in descending updated_at order", async () => {
-      await createSession({ id: "a", backend_id: "anthropic-api", main_model: "m" });
+      await createSession({
+        id: "a",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m",
+      });
       await new Promise((r) => setTimeout(r, 5));
-      await createSession({ id: "b", backend_id: "anthropic-api", main_model: "m" });
+      await createSession({
+        id: "b",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m",
+      });
       const list = await listSessions();
       expect(list.map((s) => s.id)).toEqual(["b", "a"]);
     });
 
     it("pruneEmptySessions removes only sessions with no messages", async () => {
-      await createSession({ id: "withMsg", backend_id: "anthropic-api", main_model: "m" });
-      await createSession({ id: "empty1", backend_id: "anthropic-api", main_model: "m" });
-      await createSession({ id: "empty2", backend_id: "anthropic-api", main_model: "m" });
+      await createSession({
+        id: "withMsg",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m",
+      });
+      await createSession({
+        id: "empty1",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m",
+      });
+      await createSession({
+        id: "empty2",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m",
+      });
       await appendMessage("withMsg", 0, { role: "user", content: "hi" });
       const removed = await pruneEmptySessions();
       expect(removed).toBe(2);
@@ -95,7 +141,12 @@ describe("db", () => {
     });
 
     it("pruneEmptySessions is a no-op when all sessions have messages", async () => {
-      await createSession({ id: "a", backend_id: "anthropic-api", main_model: "m" });
+      await createSession({
+        id: "a",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m",
+      });
       await appendMessage("a", 0, { role: "user", content: "hi" });
       const removed = await pruneEmptySessions();
       expect(removed).toBe(0);
@@ -162,7 +213,12 @@ describe("db", () => {
 
   describe("messages: persistence", () => {
     beforeEach(async () => {
-      await createSession({ id: "s1", backend_id: "anthropic-api", main_model: "m1" });
+      await createSession({
+        id: "s1",
+        backend_id: "anthropic-api",
+        main_provider: "anthropic",
+        main_model: "m1",
+      });
     });
 
     it("appendMessage + loadMessages preserves order", async () => {

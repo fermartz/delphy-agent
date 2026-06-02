@@ -7,6 +7,15 @@ export interface Settings {
   selected_theme: string;
   color_mode: ColorMode;
   default_backend: string;
-  main_model: string;
-  auxiliary_model: string;
+  // Null on all four = "use default behavior" per Parameter 10a of the
+  // multi-provider plan: main_provider=null fires First-Run Welcome;
+  // main_model=null falls back to the active profile's defaultModel;
+  // auxiliary_provider=null falls back to main_provider; auxiliary_model=null
+  // falls back to the resolved auxiliary profile's defaultModel.
+  main_provider: string | null;
+  main_model: string | null;
+  auxiliary_provider: string | null;
+  auxiliary_model: string | null;
+  // Base URL for the Custom OpenAI-compatible profile. Empty/null = unset.
+  openai_compatible_base_url: string | null;
 }

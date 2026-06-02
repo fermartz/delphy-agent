@@ -1,4 +1,25 @@
 import type { Settings } from "../settings/types";
+import type { UsageSnapshot } from "../types";
+
+export interface CompactionSnapshot {
+  before: number;
+  after: number;
+  tokensSaved: number;
+  at: number; // Date.now() of the compaction event
+}
+
+export interface StatusSnapshot {
+  sessionId: string | null;
+  sessionStartedAt: number | null;
+  mainProviderId: string | null;
+  mainModelId: string | null;
+  auxiliaryProviderId: string | null;
+  auxiliaryModelId: string | null;
+  messageCount: number;
+  usage: UsageSnapshot | null;
+  lastCompaction: CompactionSnapshot | null;
+  mcpServers: Array<{ id: string; toolCount: number }>;
+}
 
 export type ParsedInput =
   | { kind: "command"; name: string; args: string }
@@ -14,6 +35,7 @@ export interface CommandContext {
   compactSession: (
     focus?: string,
   ) => Promise<{ before: number; after: number; tokensSaved: number } | { error: string }>;
+  getStatus: () => StatusSnapshot;
 }
 
 export interface CommandResultItem {

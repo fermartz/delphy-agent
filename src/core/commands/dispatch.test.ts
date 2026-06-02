@@ -14,6 +14,18 @@ function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     saveSettings: vi.fn(async (partial) => ({ ...DEFAULT_SETTINGS, ...partial })),
     fetchModels: vi.fn(async () => ["claude-sonnet-4-6", "claude-haiku-4-5"]),
     compactSession: vi.fn(async () => ({ before: 20, after: 8, tokensSaved: 5000 })),
+    getStatus: vi.fn(() => ({
+      sessionId: null,
+      sessionStartedAt: null,
+      mainProviderId: null,
+      mainModelId: null,
+      auxiliaryProviderId: null,
+      auxiliaryModelId: null,
+      messageCount: 0,
+      usage: null,
+      lastCompaction: null,
+      mcpServers: [],
+    })),
     ...overrides,
   };
 }

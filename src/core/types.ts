@@ -13,7 +13,9 @@ export interface MessagePersister {
 export interface SessionOptions {
   systemPrompt?: string;
   signal?: AbortSignal;
+  providerId?: string;
   modelId?: string;
+  auxiliaryProviderId?: string;
   auxiliaryModelId?: string;
   sessionId?: string;
   initialMessages?: unknown[];
@@ -42,10 +44,42 @@ export type AgentEvent =
   | { type: "tool_call"; id: string; name: string; input: unknown }
   | { type: "tool_result"; id: string; output: unknown; isError?: boolean }
   | { type: "approval_request"; id: string; action: string; payload: unknown }
-  | { type: "usage"; inputTokens: number; outputTokens: number }
+  | {
+      type: "usage";
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens?: number;
+    }
+  | {
+      // Emitted after each turn's usage event so the StatusBar can render a
+      // live context-% indicator without re-running the token estimator in
+      // the UI layer. tokensUsed includes the system prompt + all messages
+      // (current best estimate); limit is CONTEXT_LIMIT_TOKENS.
+      type: "context_usage";
+      tokensUsed: number;
+      limit: number;
+      percent: number;
+    }
   | { type: "error"; error: Error; kind?: RuntimeErrorKind }
   | { type: "done"; reason: "complete" | "interrupted" | "error" | "max_turns" }
   | { type: "system_message"; text: string; intent?: "info" | "error" };
+
+export interface UsageSnapshot {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  turns: number;
+  contextTokens: number;
+  contextLimit: number;
+  contextPercent: number;
+}
+
+export interface LastCompactionSnapshot {
+  before: number;
+  after: number;
+  tokensSaved: number;
+  at: number;
+}
 
 export interface Session {
   readonly id: string;
@@ -55,6 +89,10 @@ export interface Session {
   close(): Promise<void>;
   respondToApproval(id: string, allowed: boolean): Promise<void>;
   compact(focus?: string): Promise<CompactResult>;
+  /** Optional; not all adapters track per-session usage (echo doesn't). */
+  getUsageSnapshot?(): UsageSnapshot;
+  /** Optional; returns null when no compaction has happened in this session. */
+  getLastCompaction?(): LastCompactionSnapshot | null;
 }
 
 export interface BackendAdapter {
