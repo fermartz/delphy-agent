@@ -1,6 +1,6 @@
-import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiKeyInput } from "@/components/api-key-input";
+import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import type { ProviderProfile } from "@/core/providers/types";
 
@@ -41,39 +41,21 @@ function placeholderFor(secretKey: string): string {
   return "Paste API key";
 }
 
-function StatusBadge({ state }: { state: ProviderRowState }) {
+function ProviderStatusBadge({ state }: { state: ProviderRowState }) {
   if (state.status === "configured") {
     return (
-      <span className="flex items-center gap-1 text-[11px] text-primary">
-        <CheckCircle2 className="h-3 w-3" />
+      <StatusBadge kind="configured">
         Configured{state.preview ? ` (${state.preview})` : ""}
-      </span>
+      </StatusBadge>
     );
   }
   if (state.status === "invalid") {
-    return (
-      <span
-        className="flex items-center gap-1 text-[11px] text-destructive"
-        title={state.testError ?? ""}
-      >
-        <XCircle className="h-3 w-3" />
-        Invalid
-      </span>
-    );
+    return <StatusBadge kind="invalid" title={state.testError ?? ""} />;
   }
   if (state.status === "testing") {
-    return (
-      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        Testing…
-      </span>
-    );
+    return <StatusBadge kind="testing" />;
   }
-  return (
-    <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-      Not configured
-    </span>
-  );
+  return <StatusBadge kind="neutral" />;
 }
 
 /**
@@ -121,9 +103,9 @@ export function ProvidersPanel({
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-col">
+                <div className="flex flex-col items-start gap-0.5">
                   <span className="text-xs font-medium text-foreground">{p.label}</span>
-                  <StatusBadge state={state} />
+                  <ProviderStatusBadge state={state} />
                 </div>
                 {!editing && !removing ? (
                   <div className="flex items-center gap-1">

@@ -4,6 +4,12 @@ import { TauriTransport } from "./tauri-transport";
 import type { McpServerConfig, McpServerStatus, McpTool, McpToolResult } from "./types";
 
 const INIT_TIMEOUT_MS = 30_000;
+// The MCP `initialize` handshake gets a longer budget than spawn/listTools:
+// for an `npx -y <pkg>` server the first run downloads the package + its deps
+// before the server can answer, which routinely exceeds 30s on a cold cache.
+// (We SIGKILL on timeout, so too short a budget kills npx mid-download and the
+// next attempt just re-downloads — it never warms the cache.)
+const CONNECT_TIMEOUT_MS = 120_000;
 const CALL_TOOL_TIMEOUT_MS = 30_000;
 
 interface ConnectedServer {
@@ -49,6 +55,16 @@ class McpManager {
   async removeServer(id: string): Promise<void> {
     const entry = this.servers.get(id);
     if (entry?.kind === "connected") {
+      // Close the SDK client first (-> transport.close() -> unsubscribes the
+      // Tauri listeners) BEFORE killing the child, so the expected stdout-EOF
+      // `exit` event isn't observed by a live transport and reported as an
+      // error (and so no stale listener survives to see a replacement's events
+      // on restart).
+      try {
+        await entry.data.client.close();
+      } catch {
+        // ignore
+      }
       try {
         await invoke("stop_mcp_server", { handle: id });
       } catch {
@@ -123,14 +139,16 @@ class McpManager {
   }
 
   async shutdown(): Promise<void> {
-    const handles: string[] = [];
-    for (const entry of this.servers.values()) {
-      if (entry.kind === "connected") {
-        handles.push(entry.data.config.id);
-      }
-    }
+    const entries = [...this.servers.values()];
     await Promise.allSettled(
-      handles.map(async (handle) => {
+      entries.map(async (entry) => {
+        if (entry.kind !== "connected") return;
+        const handle = entry.data.config.id;
+        try {
+          await entry.data.client.close();
+        } catch {
+          // ignore
+        }
         try {
           await invoke("stop_mcp_server", { handle });
         } catch (err) {
@@ -157,13 +175,22 @@ class McpManager {
       return;
     }
 
+    let transport: TauriTransport | null = null;
     try {
       const resolved = await this.resolveSecrets(config);
       const handle = await this.spawnWithTimeout(resolved);
-      const transport = new TauriTransport(handle);
+      transport = new TauriTransport(handle);
       const client = new Client({ name: "delphy-agent", version: "0.0.0" }, { capabilities: {} });
 
-      await withTimeout(client.connect(transport), INIT_TIMEOUT_MS, `connect ${config.id}`);
+      // Pass the timeout INTO the SDK's initialize request — the client applies
+      // its own DEFAULT_REQUEST_TIMEOUT_MSEC (60s) per request and would raise
+      // "-32001: Request timed out" before our outer withTimeout fires. The
+      // outer withTimeout stays as a backstop in case connect hangs entirely.
+      await withTimeout(
+        client.connect(transport, { timeout: CONNECT_TIMEOUT_MS }),
+        CONNECT_TIMEOUT_MS,
+        `connect ${config.id}`,
+      );
 
       const result = await withTimeout(
         client.listTools(),
@@ -181,8 +208,19 @@ class McpManager {
 
       this.servers.set(config.id, { kind: "connected", data: { config, client, tools } });
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      // Prefer the child's exit reason (e.g. an npm 404 on the last stderr
+      // line) over a generic "Connection closed" from the SDK when the process
+      // died during connect.
+      const error = transport?.exitReason ?? (err instanceof Error ? err.message : String(err));
       this.servers.set(config.id, { kind: "failed", data: { config, error } });
+      // Close the transport so its Tauri listeners are unsubscribed (idempotent
+      // if the fail-fast exit path already closed it) — otherwise a retry of the
+      // same id would stack a second set of listeners.
+      try {
+        await transport?.close();
+      } catch {
+        // ignore
+      }
       try {
         await invoke("stop_mcp_server", { handle: config.id });
       } catch {

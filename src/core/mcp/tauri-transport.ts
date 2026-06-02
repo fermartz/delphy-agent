@@ -35,7 +35,12 @@ export class TauriTransport implements Transport {
   private readonly handle: string;
   private stdoutOff: UnlistenFn | null = null;
   private stderrOff: UnlistenFn | null = null;
+  private exitOff: UnlistenFn | null = null;
   private closed = false;
+  /** Last line the child wrote to stderr — surfaced as the exit reason. */
+  private lastStderr: string | null = null;
+  /** Set when the child process exits before/while connecting. */
+  private exitReasonText: string | null = null;
 
   onmessage?: (message: JSONRPCMessage) => void;
   onerror?: (error: Error) => void;
@@ -50,6 +55,7 @@ export class TauriTransport implements Transport {
       throw new Error(`TauriTransport(${this.handle}): cannot start after close`);
     }
     this.stdoutOff = await listen<LinePayload>(`mcp:${this.handle}:stdout`, (event) => {
+      if (this.closed) return;
       const raw = event.payload.line;
       let msg: JSONRPCMessage;
       try {
@@ -65,8 +71,39 @@ export class TauriTransport implements Transport {
       this.onmessage?.(msg);
     });
     this.stderrOff = await listen<LinePayload>(`mcp:${this.handle}:stderr`, (event) => {
+      if (this.closed) return;
+      this.lastStderr = event.payload.line;
       console.warn(`[mcp:${this.handle}] ${event.payload.line}`);
     });
+    // When the child process exits (its stdout closes), fail fast instead of
+    // waiting out the connect timeout. Firing onclose rejects the SDK's pending
+    // `initialize` request immediately; `exitReason` carries the child's last
+    // stderr line (e.g. an npm 404) so the caller can show why.
+    this.exitOff = await listen(`mcp:${this.handle}:exit`, () => {
+      if (this.closed) return;
+      this.exitReasonText = this.lastStderr
+        ? `server process exited: ${this.lastStderr}`
+        : "server process exited before completing the connection";
+      this.closed = true;
+      this.unsubscribe();
+      this.onerror?.(new Error(`TauriTransport(${this.handle}): ${this.exitReasonText}`));
+      this.onclose?.();
+    });
+  }
+
+  /** Reason the child exited, if it did (the last stderr line when available). */
+  get exitReason(): string | null {
+    return this.exitReasonText;
+  }
+
+  /** Unsubscribe all Tauri listeners. Idempotent. */
+  private unsubscribe(): void {
+    this.stdoutOff?.();
+    this.stderrOff?.();
+    this.exitOff?.();
+    this.stdoutOff = null;
+    this.stderrOff = null;
+    this.exitOff = null;
   }
 
   async send(message: JSONRPCMessage, _options?: TransportSendOptions): Promise<void> {
@@ -79,10 +116,7 @@ export class TauriTransport implements Transport {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.stdoutOff?.();
-    this.stderrOff?.();
-    this.stdoutOff = null;
-    this.stderrOff = null;
+    this.unsubscribe();
     this.onclose?.();
   }
 }

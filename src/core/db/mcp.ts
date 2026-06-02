@@ -47,20 +47,23 @@ export async function countMcpConfigs(): Promise<number> {
 
 export async function replaceMcpConfigs(configs: McpServerConfig[]): Promise<void> {
   const db = await getDb();
-  await db.execute(`BEGIN`);
-  try {
-    await db.execute(`DELETE FROM mcp_servers`);
-    for (const config of configs) {
-      const row = configToRow(config);
-      await db.execute(
-        `INSERT INTO mcp_servers (id, name, enabled, transport, config) VALUES (?, ?, ?, ?, ?)`,
-        [row.id, row.name, row.enabled, row.transport, row.config],
-      );
-    }
-    await db.execute(`COMMIT`);
-  } catch (err) {
-    await db.execute(`ROLLBACK`);
-    throw err;
+  // NOTE: we deliberately do NOT wrap this in BEGIN/COMMIT/ROLLBACK.
+  // tauri-plugin-sql runs each db.execute() on a connection acquired from a
+  // pool, so a transaction opened by one execute() is not reliably active on
+  // the connection a later statement lands on — and a concurrent writer (e.g.
+  // session-message persistence during an active chat) can leave the rollback
+  // path firing "cannot rollback - no transaction is active", which masks the
+  // real error and blocks the whole save. `mcp_servers` is a small table that
+  // is re-derived from app state on every save (and re-seeded with defaults on
+  // boot when empty), so sequential statements are an acceptable trade for
+  // reliability here. (See BACKLOG: `replaceMessages` shares this pattern.)
+  await db.execute(`DELETE FROM mcp_servers`);
+  for (const config of configs) {
+    const row = configToRow(config);
+    await db.execute(
+      `INSERT INTO mcp_servers (id, name, enabled, transport, config) VALUES (?, ?, ?, ?, ?)`,
+      [row.id, row.name, row.enabled, row.transport, row.config],
+    );
   }
 }
 

@@ -13,9 +13,15 @@ vi.mock("@tauri-apps/api/event", () => ({
 const connectMock = vi.fn();
 const listToolsMock = vi.fn();
 const callToolMock = vi.fn();
+const closeMock = vi.fn();
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: function MockClient() {
-    return { connect: connectMock, listTools: listToolsMock, callTool: callToolMock };
+    return {
+      connect: connectMock,
+      listTools: listToolsMock,
+      callTool: callToolMock,
+      close: closeMock,
+    };
   },
 }));
 
@@ -41,6 +47,8 @@ describe("McpManager", () => {
     connectMock.mockReset();
     listToolsMock.mockReset();
     callToolMock.mockReset();
+    closeMock.mockReset();
+    closeMock.mockResolvedValue(undefined);
     mockedInvoke.mockReset();
     mockedListen.mockReset();
     // listen returns a no-op unlisten; the transport's start() awaits it.
@@ -247,6 +255,9 @@ describe("McpManager", () => {
 
     await mgr.removeServer("test-server");
     expect(mgr.getStatus()).toHaveLength(0);
+    // Client is closed (-> transport unsubscribes) before the child is killed,
+    // so the expected stdout-EOF exit can't surface as an error or leak listeners.
+    expect(closeMock).toHaveBeenCalledTimes(1);
     expect(mockedInvoke).toHaveBeenCalledWith("stop_mcp_server", { handle: "test-server" });
   });
 

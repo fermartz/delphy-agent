@@ -87,20 +87,34 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
   };
 }
 
+// Settings is now tabbed (Providers · Models · Plugins · Appearance); inactive
+// tab content is not in the DOM. Helper activates a tab before asserting.
+async function openTab(user: ReturnType<typeof userEvent.setup>, name: RegExp | string) {
+  await user.click(screen.getByRole("tab", { name }));
+}
+
 describe("SettingsModal", () => {
-  it("renders the dialog with title, theme trigger, main + auxiliary model triggers, and color-mode radios", () => {
+  it("renders the dialog with title and the four tabs", () => {
     renderModal();
     expect(screen.getByRole("dialog", { name: /settings/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /providers/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /models/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /plugins/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /appearance/i })).toBeInTheDocument();
+  });
+
+  it("Appearance tab shows the theme trigger and color-mode radios", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await openTab(user, /appearance/i);
     expect(screen.getByLabelText(/theme/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^main model$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^auxiliary model$/i)).toBeInTheDocument();
-    // 3 color-mode radios (one per mode)
     expect(screen.getAllByRole("radio")).toHaveLength(3);
   });
 
-  it("renders the new Main + Auxiliary (Provider, Model) picker pairs", () => {
+  it("Models tab renders the Main + Auxiliary (Provider, Model) picker pairs", async () => {
+    const user = userEvent.setup();
     renderModal();
-    // ProviderModelPicker renders Provider + Model selects per tier.
+    await openTab(user, /models/i);
     expect(screen.getByLabelText(/main provider/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^main model$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/auxiliary provider/i)).toBeInTheDocument();
@@ -110,6 +124,7 @@ describe("SettingsModal", () => {
   it("changing the theme Select fires onThemeChange with the new id", async () => {
     const user = userEvent.setup();
     const { onThemeChange } = renderModal();
+    await openTab(user, /appearance/i);
 
     // Open the theme Select
     const themeTrigger = screen.getByLabelText(/theme/i);
@@ -132,7 +147,8 @@ describe("SettingsModal", () => {
     });
   });
 
-  it("renders the MCP servers section with id, status badge, and tool count for each entry", () => {
+  it("renders the MCP servers section with id, status badge, and tool count for each entry", async () => {
+    const user = userEvent.setup();
     renderModal({
       mcpStatuses: [
         { id: "server-everything", name: "Everything", kind: "connected", toolCount: 13 },
@@ -149,6 +165,7 @@ describe("SettingsModal", () => {
         { id: "broken-one", name: "Broken", enabled: true, transport: "stdio", command: "bad" },
       ],
     });
+    await openTab(user, /plugins/i);
     expect(screen.getByText("server-everything")).toBeInTheDocument();
     expect(screen.getByText("connected")).toBeInTheDocument();
     expect(screen.getByText("(13 tools)")).toBeInTheDocument();
@@ -160,6 +177,7 @@ describe("SettingsModal", () => {
   it("Add server button opens the form", async () => {
     const user = userEvent.setup();
     renderModal();
+    await openTab(user, /plugins/i);
     await user.click(screen.getByText("Add server"));
     expect(screen.getByText("Add MCP server")).toBeInTheDocument();
     expect(screen.getByLabelText(/ID \(lowercase/i)).toBeInTheDocument();
@@ -169,6 +187,7 @@ describe("SettingsModal", () => {
   it("form validates required fields and shows errors", async () => {
     const user = userEvent.setup();
     renderModal();
+    await openTab(user, /plugins/i);
     await user.click(screen.getByText("Add server"));
     await user.click(screen.getByText("Add"));
     expect(screen.getByText(/id must be/i)).toBeInTheDocument();
@@ -179,6 +198,7 @@ describe("SettingsModal", () => {
   it("form rejects inline API keys in env", async () => {
     const user = userEvent.setup();
     renderModal();
+    await openTab(user, /plugins/i);
     await user.click(screen.getByText("Add server"));
     await user.type(screen.getByLabelText(/^id/i), "test");
     await user.type(screen.getByLabelText(/name/i), "Test");
@@ -192,6 +212,7 @@ describe("SettingsModal", () => {
     const user = userEvent.setup();
     const onMcpAdd = vi.fn();
     renderModal({ onMcpAdd });
+    await openTab(user, /plugins/i);
     await user.click(screen.getByText("Add server"));
     await user.type(screen.getByLabelText(/^id/i), "my-server");
     await user.type(screen.getByLabelText(/name/i), "My Server");
@@ -210,6 +231,24 @@ describe("SettingsModal", () => {
     );
   });
 
+  it("disables text correction on MCP technical fields", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await openTab(user, /plugins/i);
+    await user.click(screen.getByText("Add server"));
+
+    for (const field of [
+      screen.getByLabelText(/^id/i),
+      screen.getByLabelText(/^command$/i),
+      screen.getByLabelText(/args/i),
+      screen.getByLabelText(/environment/i),
+    ]) {
+      expect(field).toHaveAttribute("autocapitalize", "none");
+      expect(field).toHaveAttribute("autocorrect", "off");
+      expect(field).toHaveAttribute("spellcheck", "false");
+    }
+  });
+
   it("edit button opens pre-filled form for stdio servers", async () => {
     const user = userEvent.setup();
     renderModal({
@@ -225,6 +264,7 @@ describe("SettingsModal", () => {
         },
       ],
     });
+    await openTab(user, /plugins/i);
     await user.click(screen.getByTitle("Edit"));
     expect(screen.getByText("Edit server")).toBeInTheDocument();
     expect(screen.getByLabelText(/^id/i)).toHaveValue("test-server");
@@ -241,13 +281,15 @@ describe("SettingsModal", () => {
       ],
       onMcpRemove,
     });
+    await openTab(user, /plugins/i);
     await user.click(screen.getByTitle("Remove"));
     expect(screen.getByText(/remove "test-server"/i)).toBeInTheDocument();
     await user.click(screen.getByText("Confirm"));
     expect(onMcpRemove).toHaveBeenCalledWith("test-server");
   });
 
-  it("non-stdio servers show remove only, no edit or restart", () => {
+  it("non-stdio servers show remove only, no edit or restart", async () => {
+    const user = userEvent.setup();
     renderModal({
       mcpStatuses: [
         {
@@ -267,9 +309,47 @@ describe("SettingsModal", () => {
         },
       ],
     });
+    await openTab(user, /plugins/i);
     expect(screen.getByTitle("Remove")).toBeInTheDocument();
     expect(screen.queryByTitle("Edit")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Restart")).not.toBeInTheDocument();
+  });
+
+  it("transport selector reveals the URL field and saves an http config", async () => {
+    const user = userEvent.setup();
+    const onMcpAdd = vi.fn();
+    renderModal({ onMcpAdd });
+    await openTab(user, /plugins/i);
+    await user.click(screen.getByText("Add server"));
+    // Switch transport stdio -> http.
+    await user.click(screen.getByLabelText(/transport/i));
+    await user.click(await screen.findByRole("option", { name: /http/i }));
+    // Command field is replaced by a URL field.
+    expect(screen.queryByLabelText(/^command$/i)).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText(/^id/i), "remote-srv");
+    await user.type(screen.getByLabelText(/name/i), "Remote");
+    await user.type(screen.getByLabelText(/^url$/i), "https://example.com/mcp");
+    await user.click(screen.getByText("Add"));
+    expect(onMcpAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "remote-srv",
+        transport: "http",
+        url: "https://example.com/mcp",
+      }),
+    );
+  });
+
+  it("http transport with no URL surfaces the url error (previously swallowed)", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await openTab(user, /plugins/i);
+    await user.click(screen.getByText("Add server"));
+    await user.click(screen.getByLabelText(/transport/i));
+    await user.click(await screen.findByRole("option", { name: /http/i }));
+    await user.type(screen.getByLabelText(/^id/i), "remote-srv");
+    await user.type(screen.getByLabelText(/name/i), "Remote");
+    await user.click(screen.getByText("Add"));
+    expect(screen.getByText(/url is required/i)).toBeInTheDocument();
   });
 
   it("shows '(unavailable)' for a selected theme that's no longer in the registry", async () => {
@@ -279,6 +359,7 @@ describe("SettingsModal", () => {
     // visible — not an empty trigger.
     const user = userEvent.setup();
     renderModal({ selectedThemeId: "ghost-theme" });
+    await openTab(user, /appearance/i);
     const themeTrigger = screen.getByLabelText(/theme/i);
     // The trigger shows the synthetic label, so the controlled value matches an item.
     expect(themeTrigger).toHaveTextContent(/ghost-theme \(unavailable\)/i);

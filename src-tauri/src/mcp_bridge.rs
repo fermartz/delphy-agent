@@ -143,8 +143,13 @@ pub async fn spawn_mcp_server(
         .take()
         .ok_or_else(|| "SPAWN_FAILED: child stderr was not piped".to_string())?;
 
-    spawn_line_reader(stdout, app.clone(), config.id.clone(), "stdout");
-    spawn_line_reader(stderr, app.clone(), config.id.clone(), "stderr");
+    // The stdout reader signals process exit (stdout closes when the child
+    // dies) by emitting `mcp:<id>:exit` so the TS transport can fail a pending
+    // connect immediately instead of waiting out the connect timeout (e.g. an
+    // `npx` server that exits with an npm 404). The stderr reader does not, to
+    // avoid a double signal.
+    spawn_line_reader(stdout, app.clone(), config.id.clone(), "stdout", true);
+    spawn_line_reader(stderr, app.clone(), config.id.clone(), "stderr", false);
 
     let handle = ChildHandle {
         pid,
@@ -302,8 +307,13 @@ pub fn cleanup_on_exit_blocking(app_handle: &AppHandle) {
     }
 }
 
-fn spawn_line_reader<R>(reader: R, app: AppHandle, id: String, channel: &'static str)
-where
+fn spawn_line_reader<R>(
+    reader: R,
+    app: AppHandle,
+    id: String,
+    channel: &'static str,
+    signal_exit: bool,
+) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     let event_name = format!("mcp:{id}:{channel}");
@@ -323,6 +333,11 @@ where
                     break;
                 }
             }
+        }
+        // The stream closed — for stdout this means the child process has
+        // exited. Signal it so a pending connect can fail fast.
+        if signal_exit {
+            let _ = app.emit(&format!("mcp:{id}:exit"), ());
         }
     });
 }

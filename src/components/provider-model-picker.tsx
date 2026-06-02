@@ -141,14 +141,13 @@ export function ProviderModelPicker({
         </Select>
       </div>
 
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>Curated list shown — click "Show all" to discover every model.</span>
+      <div className="flex items-center justify-end gap-2 text-[11px] text-muted-foreground">
         {!showAll ? (
           <button
             type="button"
             onClick={handleShowAll}
             disabled={!activeProfile}
-            className="text-primary hover:underline disabled:opacity-50"
+            className="shrink-0 text-primary hover:underline disabled:opacity-50"
           >
             Show all
           </button>

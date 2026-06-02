@@ -340,6 +340,10 @@ Used for simple app preferences where queries are unnecessary.
 
 API keys, OAuth tokens, and any other credential material live in a separate, encrypted store (Stronghold tentatively — to confirm during scaffolding). Never in SQLite, never in Tauri Store, never in React state for longer than the lifetime of a single request.
 
+### Settings UI
+
+`SettingsModal` (`src/components/settings-modal.tsx`) is a tabbed dialog (shadcn `Tabs`): **Providers** (credential management), **Models** (Main + Auxiliary provider/model pickers), **Plugins** (MCP server list + add/edit form with a stdio/http/sse transport selector), and **Appearance** (theme + color mode). Status pills across the dialog share one `StatusBadge` component. MCP add/enable shows an optimistic `connecting…` row and surfaces connect failures (which `bootOne` reports as `kind:"failed"` rather than throwing) via a toast.
+
 ---
 
 ## Sessions: prompts and compaction

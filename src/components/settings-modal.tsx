@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -7,6 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
@@ -15,8 +18,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { type McpConfigValidationError, validateMcpConfig } from "@/core/mcp/store";
-import type { McpServerConfig, McpServerStatus } from "@/core/mcp/types";
+import type { McpServerConfig, McpServerStatus, McpTransport } from "@/core/mcp/types";
 import type { ProviderProfile } from "@/core/providers/types";
 import type { ColorMode, Settings } from "@/core/settings/types";
 import type { Theme } from "@/themes/types";
@@ -96,6 +102,10 @@ export function SettingsModal({
   const [mcpEditId, setMcpEditId] = useState<string | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
+  // Status lookup by id; the MCP list renders from `mcpConfigs` and decorates
+  // each row with its live status (if the manager has reported one).
+  const statusById = new Map(mcpStatuses.map((s) => [s.id, s]));
+
   const handleMcpAdd = useCallback(() => {
     setMcpEditId(null);
     setMcpFormOpen(true);
@@ -125,6 +135,7 @@ export function SettingsModal({
       setConfirmRemoveId(null);
     }
   }, [confirmRemoveId, onMcpRemove]);
+
   // The Select is controlled by `selectedThemeId`. If the active theme is no
   // longer in the registry (e.g., the user deleted a custom theme file while
   // the watcher reloaded), prepend a synthetic "(unavailable)" option so the
@@ -142,186 +153,226 @@ export function SettingsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription className="sr-only">
-            Configure model, theme, and color mode.
+            Configure providers, models, plugins, and appearance.
           </DialogDescription>
         </DialogHeader>
 
-        <ProvidersPanel
-          profiles={providerProfiles}
-          states={providerStates}
-          editingId={providerEditId}
-          highlightId={providerHighlightId}
-          saving={providerSaving}
-          onEdit={onProviderEdit}
-          onSave={onProviderSave}
-          onTest={onProviderTest}
-          onRemove={onProviderRemove}
-        />
+        <Tabs defaultValue="providers" className="w-full">
+          <TabsList className="w-full">
+            <TabsTrigger value="providers">Providers</TabsTrigger>
+            <TabsTrigger value="models">Models</TabsTrigger>
+            <TabsTrigger value="plugins">Plugins</TabsTrigger>
+            <TabsTrigger value="appearance">Appearance</TabsTrigger>
+          </TabsList>
 
-        <ProviderModelPicker
-          label="Main"
-          profiles={providerProfiles}
-          providerHasKey={(id) => providerStates[id]?.status === "configured"}
-          resolveApiKey={resolveApiKey}
-          settings={settings}
-          currentProviderId={currentMainProvider}
-          currentModelId={currentModel}
-          onChange={onMainProviderModelChange}
-        />
+          <TabsContent value="providers" className="mt-3">
+            <ProvidersPanel
+              profiles={providerProfiles}
+              states={providerStates}
+              editingId={providerEditId}
+              highlightId={providerHighlightId}
+              saving={providerSaving}
+              onEdit={onProviderEdit}
+              onSave={onProviderSave}
+              onTest={onProviderTest}
+              onRemove={onProviderRemove}
+            />
+          </TabsContent>
 
-        <ProviderModelPicker
-          label="Auxiliary"
-          profiles={providerProfiles}
-          providerHasKey={(id) => providerStates[id]?.status === "configured"}
-          resolveApiKey={resolveApiKey}
-          settings={settings}
-          currentProviderId={currentAuxiliaryProvider}
-          currentModelId={currentAuxiliaryModel}
-          onChange={onAuxiliaryProviderModelChange}
-        />
+          <TabsContent value="models" className="mt-3 space-y-3">
+            <ProviderModelPicker
+              label="Main"
+              profiles={providerProfiles}
+              providerHasKey={(id) => providerStates[id]?.status === "configured"}
+              resolveApiKey={resolveApiKey}
+              settings={settings}
+              currentProviderId={currentMainProvider}
+              currentModelId={currentModel}
+              onChange={onMainProviderModelChange}
+            />
 
-        <section className="space-y-2">
-          <div className="text-xs font-medium text-foreground">Theme</div>
-          <Select
-            value={selectedThemeId}
-            onValueChange={onThemeChange}
-            disabled={themes.length === 0}
-          >
-            <SelectTrigger aria-label="Theme" className="w-full">
-              <SelectValue placeholder="Select a theme" />
-            </SelectTrigger>
-            <SelectContent>
-              {themeOptions.map((t) => (
-                <SelectItem key={t.id} value={t.id}>
-                  {t.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </section>
+            <ProviderModelPicker
+              label="Auxiliary"
+              profiles={providerProfiles}
+              providerHasKey={(id) => providerStates[id]?.status === "configured"}
+              resolveApiKey={resolveApiKey}
+              settings={settings}
+              currentProviderId={currentAuxiliaryProvider}
+              currentModelId={currentAuxiliaryModel}
+              onChange={onAuxiliaryProviderModelChange}
+            />
 
-        <section className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="text-xs font-medium text-foreground">MCP servers</div>
-            <Button type="button" variant="outline" size="sm" onClick={handleMcpAdd}>
-              Add server
-            </Button>
-          </div>
-          {mcpStatuses.length === 0 ? (
-            <div className="text-xs text-muted-foreground">No MCP servers configured.</div>
-          ) : (
-            <ul className="space-y-1.5 text-xs">
-              {mcpStatuses.map((s) => {
-                const config = mcpConfigs.find((c) => c.id === s.id);
-                const isStdio = config?.transport === "stdio";
-                return (
-                  <li key={s.id} className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => config && onMcpToggle(s.id, !config.enabled)}
-                      className={`h-3 w-3 shrink-0 rounded-full border ${config?.enabled ? "border-primary bg-primary" : "border-muted-foreground bg-transparent"}`}
-                      title={config?.enabled ? "Disable" : "Enable"}
-                      aria-label={config?.enabled ? `Disable ${s.name}` : `Enable ${s.name}`}
-                    />
-                    <span className="font-mono text-foreground">{s.id}</span>
-                    <McpStatusBadge status={s} />
-                    {s.kind === "connected" && typeof s.toolCount === "number" ? (
-                      <span className="text-muted-foreground">
-                        ({s.toolCount} {s.toolCount === 1 ? "tool" : "tools"})
-                      </span>
-                    ) : null}
-                    {s.kind === "failed" && s.error ? (
-                      <span className="max-w-[120px] truncate text-destructive" title={s.error}>
-                        {s.error}
-                      </span>
-                    ) : null}
-                    <span className="ml-auto flex shrink-0 gap-1">
-                      {isStdio ? (
-                        <button
-                          type="button"
-                          onClick={() => handleMcpEdit(s.id)}
-                          className="text-muted-foreground hover:text-foreground"
-                          title="Edit"
-                        >
-                          edit
-                        </button>
-                      ) : null}
-                      {isStdio && config?.enabled ? (
-                        <button
-                          type="button"
-                          onClick={() => onMcpRestart(s.id)}
-                          className="text-muted-foreground hover:text-foreground"
-                          title="Restart"
-                        >
-                          restart
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => setConfirmRemoveId(s.id)}
-                        className="text-destructive/70 hover:text-destructive"
-                        title="Remove"
-                      >
-                        remove
-                      </button>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {confirmRemoveId ? (
-            <div className="flex items-center gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
-              <span>Remove "{confirmRemoveId}"?</span>
-              <Button type="button" variant="destructive" size="sm" onClick={handleConfirmRemove}>
-                Confirm
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setConfirmRemoveId(null)}
+            <p className="text-[11px] text-muted-foreground">
+              Curated list shown — click "Show all" on a picker to discover every model. Auxiliary
+              runs cheap helper calls (compaction, titles).
+            </p>
+          </TabsContent>
+
+          <TabsContent value="plugins" className="mt-3">
+            <section className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-medium text-foreground">MCP servers</div>
+                <Button type="button" variant="outline" size="sm" onClick={handleMcpAdd}>
+                  Add server
+                </Button>
+              </div>
+              {mcpConfigs.length === 0 ? (
+                <div className="text-xs text-muted-foreground">No MCP servers configured.</div>
+              ) : (
+                <ul className="max-h-64 space-y-1.5 overflow-y-auto text-xs">
+                  {mcpConfigs.map((config) => {
+                    // Rows are anchored to the persisted configs (source of truth
+                    // for what exists); status is decoration looked up by id. A
+                    // configured server therefore never vanishes even if the
+                    // manager hasn't recorded a status for it yet.
+                    const status = statusById.get(config.id);
+                    const kind = status?.kind ?? (config.enabled ? "connecting" : "disabled");
+                    const isStdio = config.transport === "stdio";
+                    return (
+                      <li key={config.id} className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={config.enabled}
+                            onCheckedChange={(v) => onMcpToggle(config.id, v)}
+                            aria-label={
+                              config.enabled ? `Disable ${config.name}` : `Enable ${config.name}`
+                            }
+                          />
+                          <span className="font-mono text-foreground">{config.id}</span>
+                          <StatusBadge kind={kind} />
+                          {kind === "connected" && typeof status?.toolCount === "number" ? (
+                            <span className="text-muted-foreground">
+                              ({status.toolCount} {status.toolCount === 1 ? "tool" : "tools"})
+                            </span>
+                          ) : null}
+                          <span className="ml-auto flex shrink-0 gap-1">
+                            {isStdio ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-1.5 text-xs"
+                                title="Edit"
+                                onClick={() => handleMcpEdit(config.id)}
+                              >
+                                Edit
+                              </Button>
+                            ) : null}
+                            {isStdio && config.enabled ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-1.5 text-xs"
+                                title="Restart"
+                                onClick={() => onMcpRestart(config.id)}
+                              >
+                                Restart
+                              </Button>
+                            ) : null}
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 px-1.5 text-xs text-destructive"
+                              title="Remove"
+                              onClick={() => setConfirmRemoveId(config.id)}
+                            >
+                              Remove
+                            </Button>
+                          </span>
+                        </div>
+                        {kind === "failed" && status?.error ? (
+                          <p className="break-words pl-9 text-[11px] text-destructive">
+                            {status.error}
+                          </p>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {confirmRemoveId ? (
+                <div className="flex items-center gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+                  <span>Remove "{confirmRemoveId}"?</span>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleConfirmRemove}
+                  >
+                    Confirm
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfirmRemoveId(null)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              ) : null}
+
+              {mcpFormOpen ? (
+                <McpServerForm
+                  editConfig={mcpEditId ? mcpConfigs.find((c) => c.id === mcpEditId) : undefined}
+                  existingIds={mcpConfigs.map((c) => c.id)}
+                  onSave={handleMcpFormSave}
+                  onCancel={() => {
+                    setMcpFormOpen(false);
+                    setMcpEditId(null);
+                  }}
+                />
+              ) : null}
+            </section>
+          </TabsContent>
+
+          <TabsContent value="appearance" className="mt-3 space-y-4">
+            <section className="space-y-2">
+              <div className="text-xs font-medium text-foreground">Theme</div>
+              <Select
+                value={selectedThemeId}
+                onValueChange={onThemeChange}
+                disabled={themes.length === 0}
               >
-                Cancel
-              </Button>
-            </div>
-          ) : null}
-        </section>
+                <SelectTrigger aria-label="Theme" className="w-full">
+                  <SelectValue placeholder="Select a theme" />
+                </SelectTrigger>
+                <SelectContent>
+                  {themeOptions.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </section>
 
-        {mcpFormOpen ? (
-          <McpServerForm
-            editConfig={mcpEditId ? mcpConfigs.find((c) => c.id === mcpEditId) : undefined}
-            existingIds={mcpConfigs.map((c) => c.id)}
-            onSave={handleMcpFormSave}
-            onCancel={() => {
-              setMcpFormOpen(false);
-              setMcpEditId(null);
-            }}
-          />
-        ) : null}
-
-        <section className="space-y-2">
-          <div className="text-xs font-medium text-foreground">Color mode</div>
-          <RadioGroup
-            value={colorMode}
-            onValueChange={(value) => onColorModeChange(value as ColorMode)}
-            className="flex gap-4 text-xs text-foreground"
-          >
-            {COLOR_MODES.map((mode) => {
-              const id = `color-mode-${mode}`;
-              return (
-                <label key={mode} htmlFor={id} className="flex items-center gap-1.5 capitalize">
-                  <RadioGroupItem id={id} value={mode} />
-                  {mode}
-                </label>
-              );
-            })}
-          </RadioGroup>
-        </section>
+            <section className="space-y-2">
+              <div className="text-xs font-medium text-foreground">Color mode</div>
+              <RadioGroup
+                value={colorMode}
+                onValueChange={(value) => onColorModeChange(value as ColorMode)}
+                className="flex gap-4 text-xs text-foreground"
+              >
+                {COLOR_MODES.map((mode) => {
+                  const id = `color-mode-${mode}`;
+                  return (
+                    <label key={mode} htmlFor={id} className="flex items-center gap-1.5 capitalize">
+                      <RadioGroupItem id={id} value={mode} />
+                      {mode}
+                    </label>
+                  );
+                })}
+              </RadioGroup>
+            </section>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
@@ -341,37 +392,36 @@ function McpServerForm({
   const [id, setId] = useState(editConfig?.id ?? "");
   const [name, setName] = useState(editConfig?.name ?? "");
   const [enabled, setEnabled] = useState(editConfig?.enabled ?? true);
+  const [transport, setTransport] = useState<McpTransport>(editConfig?.transport ?? "stdio");
   const [command, setCommand] = useState(editConfig?.command ?? "");
   const [args, setArgs] = useState(editConfig?.args?.join(" ") ?? "");
-  const [envText, setEnvText] = useState(
-    editConfig?.env
-      ? Object.entries(editConfig.env)
-          .map(([k, v]) => `${k}=${v}`)
-          .join("\n")
-      : "",
-  );
+  const [envText, setEnvText] = useState(linesFromRecord(editConfig?.env));
+  const [url, setUrl] = useState(editConfig?.url ?? "");
+  const [headersText, setHeadersText] = useState(linesFromRecord(editConfig?.headers));
   const [errors, setErrors] = useState<McpConfigValidationError[]>([]);
+
+  const isRemote = transport === "http" || transport === "sse";
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      const env: Record<string, string> = {};
-      for (const line of envText.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const eqIdx = trimmed.indexOf("=");
-        if (eqIdx > 0) {
-          env[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
-        }
-      }
+      const env = recordFromLines(envText);
+      const headers = recordFromLines(headersText);
       const config: McpServerConfig = {
         id: id.trim(),
         name: name.trim(),
         enabled,
-        transport: "stdio",
-        command: command.trim(),
-        args: args.trim() ? args.trim().split(/\s+/) : undefined,
-        env: Object.keys(env).length > 0 ? env : undefined,
+        transport,
+        ...(transport === "stdio"
+          ? {
+              command: command.trim(),
+              args: args.trim() ? args.trim().split(/\s+/) : undefined,
+              env: Object.keys(env).length > 0 ? env : undefined,
+            }
+          : {
+              url: url.trim(),
+              headers: Object.keys(headers).length > 0 ? headers : undefined,
+            }),
       };
       const validationErrors = validateMcpConfig(config, existingIds, editConfig?.id);
       if (validationErrors.length > 0) {
@@ -380,7 +430,20 @@ function McpServerForm({
       }
       onSave(config);
     },
-    [id, name, enabled, command, args, envText, existingIds, editConfig, onSave],
+    [
+      id,
+      name,
+      enabled,
+      transport,
+      command,
+      args,
+      envText,
+      url,
+      headersText,
+      existingIds,
+      editConfig,
+      onSave,
+    ],
   );
 
   const fieldError = (field: string) => errors.find((e) => e.field === field)?.message;
@@ -389,83 +452,164 @@ function McpServerForm({
     <section className="space-y-2 rounded border border-border bg-muted/30 p-3">
       <div className="text-xs font-medium">{editConfig ? "Edit server" : "Add MCP server"}</div>
       <form onSubmit={handleSubmit} className="space-y-2 text-xs">
-        <div>
-          <label htmlFor="mcp-id" className="text-muted-foreground">
+        <div className="space-y-1">
+          <Label htmlFor="mcp-id" className="text-muted-foreground">
             ID (lowercase, hyphens)
-          </label>
-          <input
+          </Label>
+          <Input
             id="mcp-id"
             value={id}
             onChange={(e) => setId(e.target.value)}
             disabled={!!editConfig}
-            className="mt-0.5 w-full rounded border border-border bg-background px-2 py-1 font-mono text-foreground disabled:opacity-50"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="font-mono"
           />
           {fieldError("id") ? <div className="text-destructive">{fieldError("id")}</div> : null}
         </div>
-        <div>
-          <label htmlFor="mcp-name" className="text-muted-foreground">
+        <div className="space-y-1">
+          <Label htmlFor="mcp-name" className="text-muted-foreground">
             Name
-          </label>
-          <input
-            id="mcp-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="mt-0.5 w-full rounded border border-border bg-background px-2 py-1 text-foreground"
-          />
+          </Label>
+          <Input id="mcp-name" value={name} onChange={(e) => setName(e.target.value)} />
           {fieldError("name") ? <div className="text-destructive">{fieldError("name")}</div> : null}
         </div>
-        <div>
-          <label htmlFor="mcp-command" className="text-muted-foreground">
-            Command
-          </label>
-          <input
-            id="mcp-command"
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            placeholder="e.g. npx"
-            className="mt-0.5 w-full rounded border border-border bg-background px-2 py-1 font-mono text-foreground"
-          />
-          {fieldError("command") ? (
-            <div className="text-destructive">{fieldError("command")}</div>
+        <div className="space-y-1">
+          <Label htmlFor="mcp-transport" className="text-muted-foreground">
+            Transport
+          </Label>
+          <Select value={transport} onValueChange={(v) => setTransport(v as McpTransport)}>
+            <SelectTrigger id="mcp-transport" aria-label="Transport" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="stdio">stdio (local command)</SelectItem>
+              <SelectItem value="http">http (remote)</SelectItem>
+              <SelectItem value="sse">sse (remote)</SelectItem>
+            </SelectContent>
+          </Select>
+          {isRemote ? (
+            <div className="text-[11px] text-muted-foreground">
+              Remote transports are not yet connectable — the server will be saved but show as
+              failed until HTTP/SSE support lands.
+            </div>
           ) : null}
         </div>
-        <div>
-          <label htmlFor="mcp-args" className="text-muted-foreground">
-            Args (space-separated)
-          </label>
-          <input
-            id="mcp-args"
-            value={args}
-            onChange={(e) => setArgs(e.target.value)}
-            placeholder="e.g. -y @modelcontextprotocol/server-github"
-            className="mt-0.5 w-full rounded border border-border bg-background px-2 py-1 font-mono text-foreground"
-          />
+
+        {transport === "stdio" ? (
+          <>
+            <div className="space-y-1">
+              <Label htmlFor="mcp-command" className="text-muted-foreground">
+                Command
+              </Label>
+              <Input
+                id="mcp-command"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="e.g. npx"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                className="font-mono"
+              />
+              {fieldError("command") ? (
+                <div className="text-destructive">{fieldError("command")}</div>
+              ) : null}
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="mcp-args" className="text-muted-foreground">
+                Args (space-separated)
+              </Label>
+              <Input
+                id="mcp-args"
+                value={args}
+                onChange={(e) => setArgs(e.target.value)}
+                placeholder="e.g. -y delphy-mcp"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                className="font-mono"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="mcp-env" className="text-muted-foreground">
+                Environment (KEY=value, one per line)
+              </Label>
+              <Textarea
+                id="mcp-env"
+                value={envText}
+                onChange={(e) => setEnvText(e.target.value)}
+                // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder text
+                placeholder={"GITHUB_TOKEN=${secret:github_pat}"}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                rows={2}
+                className="font-mono"
+              />
+              {errors
+                .filter((e) => e.field.startsWith("env."))
+                .map((e) => (
+                  <div key={e.field} className="text-destructive">
+                    {e.message}
+                  </div>
+                ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <Label htmlFor="mcp-url" className="text-muted-foreground">
+                URL
+              </Label>
+              <Input
+                id="mcp-url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/mcp"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                className="font-mono"
+              />
+              {fieldError("url") ? (
+                <div className="text-destructive">{fieldError("url")}</div>
+              ) : null}
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="mcp-headers" className="text-muted-foreground">
+                Headers (KEY=value, one per line)
+              </Label>
+              <Textarea
+                id="mcp-headers"
+                value={headersText}
+                onChange={(e) => setHeadersText(e.target.value)}
+                // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder text
+                placeholder={"Authorization=Bearer ${secret:delphy_token}"}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                rows={2}
+                className="font-mono"
+              />
+              {errors
+                .filter((e) => e.field.startsWith("headers."))
+                .map((e) => (
+                  <div key={e.field} className="text-destructive">
+                    {e.message}
+                  </div>
+                ))}
+            </div>
+          </>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Switch id="mcp-enabled" checked={enabled} onCheckedChange={setEnabled} />
+          <Label htmlFor="mcp-enabled" className="text-muted-foreground">
+            Enabled
+          </Label>
         </div>
-        <div>
-          <label htmlFor="mcp-env" className="text-muted-foreground">
-            Environment (KEY=value, one per line)
-          </label>
-          <textarea
-            id="mcp-env"
-            value={envText}
-            onChange={(e) => setEnvText(e.target.value)}
-            // biome-ignore lint/suspicious/noTemplateCurlyInString: literal placeholder text
-            placeholder={"GITHUB_TOKEN=${secret:github_pat}"}
-            rows={2}
-            className="mt-0.5 w-full rounded border border-border bg-background px-2 py-1 font-mono text-foreground"
-          />
-          {errors
-            .filter((e) => e.field.startsWith("env."))
-            .map((e) => (
-              <div key={e.field} className="text-destructive">
-                {e.message}
-              </div>
-            ))}
-        </div>
-        <label className="flex items-center gap-2 text-muted-foreground">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Enabled
-        </label>
         <div className="flex gap-2">
           <Button type="submit" size="sm">
             {editConfig ? "Save" : "Add"}
@@ -479,21 +623,23 @@ function McpServerForm({
   );
 }
 
-function McpStatusBadge({ status }: { status: McpServerStatus }) {
-  switch (status.kind) {
-    case "connecting":
-      return (
-        <span className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground">connecting…</span>
-      );
-    case "connected":
-      return <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 text-primary">connected</span>;
-    case "failed":
-      return (
-        <span className="rounded-sm bg-destructive/10 px-1.5 py-0.5 text-destructive">failed</span>
-      );
-    case "disabled":
-      return (
-        <span className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground">disabled</span>
-      );
+function linesFromRecord(record?: Record<string, string>): string {
+  return record
+    ? Object.entries(record)
+        .map(([k, v]) => `${k}=${v}`)
+        .join("\n")
+    : "";
+}
+
+function recordFromLines(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx > 0) {
+      out[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
+    }
   }
+  return out;
 }
