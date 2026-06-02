@@ -167,7 +167,7 @@ type AgentEvent =
 - `interrupt()` → asks Rust to send SIGTERM
 
 **`direct-api.ts`** — wraps Vercel AI SDK v6:
-- Resolves a `ProviderProfile` from `src/core/providers/` (shipped: `anthropic`, `openai`, `google`, `xai`, `openai-compatible` for Kimi/DeepSeek/OpenRouter/etc.) for both the main and auxiliary tier. The auxiliary default resolves `defaultAuxiliaryModel ?? defaultModel` of the auxiliary profile (no hardcoded model). Each profile carries a `pricing` table + a `discoveryFingerprint` for the 5-minute model-discovery cache (`providers/discovery-cache.ts`).
+- Resolves a `ProviderProfile` from `src/core/providers/` (shipped: `anthropic`, `openai`, `google`, `xai`, plus first-class OpenAI-compatible `openrouter`/`kimi`/`deepseek`/`groq`, and the generic `openai-compatible` for the long tail) for both the main and auxiliary tier. The auxiliary default resolves `defaultAuxiliaryModel ?? defaultModel` of the auxiliary profile (no hardcoded model). Each profile carries a `pricing` table + a `discoveryFingerprint` for the 5-minute model-discovery cache (`providers/discovery-cache.ts`).
 - Uses `streamText({ model, messages, tools, ... })` and translates streaming chunks into `AgentEvent`s; accumulates per-session token usage and emits a `context_usage` event each turn (surfaced by the StatusBar + `/status`).
 - Tool list is composed from connected MCP servers (see MCP section)
 - API keys are pulled from secret store via a Tauri command, keyed per profile (`profile.secretKey`); never live in the React state

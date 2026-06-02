@@ -35,9 +35,13 @@ export interface ProvidersPanelProps {
 
 function placeholderFor(secretKey: string): string {
   if (secretKey.startsWith("anthropic")) return "sk-ant-...";
+  if (secretKey.startsWith("openrouter")) return "sk-or-...";
   if (secretKey.startsWith("openai")) return "sk-...";
   if (secretKey.startsWith("google")) return "AIza...";
   if (secretKey.startsWith("xai")) return "xai-...";
+  if (secretKey.startsWith("groq")) return "gsk_...";
+  if (secretKey.startsWith("deepseek")) return "sk-...";
+  if (secretKey.startsWith("kimi")) return "sk-...";
   return "Paste API key";
 }
 
