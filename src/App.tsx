@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { AppHeader } from "@/components/app-header";
 import { BootBanner } from "@/components/boot-banner";
 import { ChatStream } from "@/components/chat-stream";
@@ -12,13 +12,10 @@ import { Toast } from "@/components/toast";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { useProviders } from "@/hooks/use-providers";
-import { bootOptsFor, useSession } from "@/hooks/use-session";
+import { useSession } from "@/hooks/use-session";
 import { useThemes } from "@/hooks/use-themes";
-import { startActiveBackend } from "./core/boot";
-import { reduceChatItems } from "./core/chat/items-reducer";
-import { type ChatItem, projectMessagesToChatItems } from "./core/chat-projection";
+import { nextItemId } from "./core/chat/item-id";
 import { type CommandContext, dispatchInput } from "./core/commands";
-import { getSession, listSessions, type SessionListEntry } from "./core/db/sessions";
 import { getProvider, listProviders } from "./core/providers";
 import { anthropicProfile } from "./core/providers/anthropic";
 import { resolveProviderApiKey } from "./core/providers/resolve-key";
@@ -27,47 +24,22 @@ import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
 import type { ColorMode, Settings } from "./core/settings/types";
 
-let itemCounter = 0;
-function nextItemId(): string {
-  itemCounter += 1;
-  return `i-${itemCounter}`;
-}
-
 function App() {
-  // App-owned UI + chat state (session-lifecycle state lives in useSession).
-  const [items, setItems] = useState<ChatItem[]>([]);
+  // App-owned state: boot-banner key input + app-wide config + chrome.
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [sessionList, setSessionList] = useState<SessionListEntry[]>([]);
-  const [sessionTokens, setSessionTokens] = useState<{ in: number; out: number; cached: number }>({
-    in: 0,
-    out: 0,
-    cached: 0,
-  });
-  const [contextPercent, setContextPercent] = useState(0);
-  // First-Run Welcome state. Trigger is the single condition
-  // `settings.main_provider == null` (Parameter 10).
-  const [welcomeOpen, setWelcomeOpen] = useState(false);
-  const [welcomePreselectId, setWelcomePreselectId] = useState<string | null>(null);
-  const [welcomeHasAnyKey, setWelcomeHasAnyKey] = useState(false);
 
-  // Toast + chat-reset callbacks shared into the hooks below.
+  // Toast + callbacks shared into the hooks below.
   const mcpToast = useCallback((message: string) => {
     setToast(message);
     setTimeout(() => setToast(null), 4000);
   }, []);
-  const resetConversation = useCallback(() => {
-    setItems([]);
-    setSessionTokens({ in: 0, out: 0, cached: 0 });
-    setContextPercent(0);
-  }, []);
-  const stopStreaming = useCallback(() => setStreaming(false), []);
   const clearKeyInput = useCallback(() => setKeyInput(""), []);
+  const onSettingsLoaded = useCallback((loaded: Settings) => setSettings(loaded), []);
 
   const { themes } = useThemes({
     selectedThemeId: settings.selected_theme,
@@ -95,27 +67,30 @@ function App() {
     handleProviderRemove,
   } = useProviders({ settings });
   const {
+    items,
+    setItems,
+    streaming,
+    setStreaming,
+    sessionTokens,
+    contextPercent,
+    sessionList,
     backend,
-    setBackend,
     bootError,
     setBootError,
     ready,
-    setReady,
     activeSessionId,
-    setActiveSessionId,
-    sessionStartedAt,
-    setSessionStartedAt,
     activeProviderId,
-    setActiveProviderId,
-    resumeRequest,
-    setResumeRequest,
-    rebootCounter,
+    sessionStartedAt,
     sessionRef,
+    welcomeOpen,
+    setWelcomeOpen,
+    welcomePreselectId,
+    welcomeHasAnyKey,
     triggerReboot,
     startFreshSession,
     switchToSession,
     restartSession,
-  } = useSession({ resetConversation, stopStreaming, clearKeyInput });
+  } = useSession({ clearKeyInput, onSettingsLoaded });
   const { scrollRef, onScroll: handleScroll } = useChatScroll(items);
 
   // Profile for the current active provider, derived from boot state. Falls
@@ -125,111 +100,6 @@ function App() {
     (activeProviderId ? getProvider(activeProviderId) : null) ?? anthropicProfile;
 
   const providerProfiles = listProviders();
-
-  async function refreshSessionList() {
-    try {
-      const list = await listSessions();
-      setSessionList(list);
-    } catch (err) {
-      console.warn("listSessions failed", err);
-    }
-  }
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: rebootCounter is an effect-trigger; its value isn't read inside the effect, but bumping it re-runs the boot flow (used after Save + Change API key).
-  useEffect(() => {
-    let active = true;
-
-    (async () => {
-      const result = await startActiveBackend(bootOptsFor(resumeRequest));
-      if (!active) {
-        await result.session.close();
-        return;
-      }
-      sessionRef.current = result.session;
-      setBackend(result.backend);
-      setBootError(result.error ?? null);
-      setSettings(result.settings);
-      setActiveSessionId(result.sessionId);
-      setActiveProviderId(result.activeProviderId);
-      // Resolve created_at for the session row (resumed sessions have a row
-      // already; fresh sessions get a row created lazily on first persist).
-      if (result.sessionId) {
-        try {
-          const row = await getSession(result.sessionId);
-          if (active) setSessionStartedAt(row?.created_at ?? null);
-        } catch {
-          /* boot continues without session-age */
-        }
-      } else {
-        setSessionStartedAt(null);
-      }
-      if (result.initialMessages.length > 0) {
-        setItems(projectMessagesToChatItems(result.initialMessages));
-      }
-      void refreshSessionList();
-      setReady(true);
-      setResumeRequest(null);
-
-      // CP6 Parameter 10: single trigger for First-Run Welcome —
-      // settings.main_provider is null at boot. Keychain state only affects
-      // the Welcome content (pre-selection + copy), never the trigger.
-      if (result.settings.main_provider === null) {
-        const probed = await Promise.all(
-          listProviders().map(async (p) => {
-            const stored = await resolveProviderApiKey(p.secretKey);
-            return stored && stored.length > 0 ? p.id : null;
-          }),
-        );
-        const firstConfigured = probed.find((id) => id !== null) ?? null;
-        if (!active) return;
-        setWelcomePreselectId(firstConfigured);
-        setWelcomeHasAnyKey(firstConfigured !== null);
-        setWelcomeOpen(true);
-      }
-
-      for await (const event of result.session.events) {
-        if (!active) break;
-
-        // Items projection is a pure reducer (core/chat/items-reducer). Events
-        // that don't touch items return the same reference, so this is a no-op
-        // render for usage/context_usage/thinking.
-        setItems((prev) => reduceChatItems(prev, event, nextItemId));
-
-        // Side effects that lived alongside the item cases stay here.
-        switch (event.type) {
-          case "done":
-            setStreaming(false);
-            void refreshSessionList();
-            break;
-
-          case "usage":
-            setSessionTokens((prev) => ({
-              in: prev.in + event.inputTokens,
-              out: prev.out + event.outputTokens,
-              cached: prev.cached + (event.cachedInputTokens ?? 0),
-            }));
-            break;
-
-          case "context_usage":
-            setContextPercent(event.percent);
-            break;
-
-          case "error":
-            setStreaming(false);
-            break;
-
-          default:
-            break;
-        }
-      }
-    })();
-
-    return () => {
-      active = false;
-      sessionRef.current?.close();
-      sessionRef.current = null;
-    };
-  }, [rebootCounter]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
