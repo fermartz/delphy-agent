@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { AppHeader } from "@/components/app-header";
 import { BootBanner } from "@/components/boot-banner";
 import { ChatStream } from "@/components/chat-stream";
@@ -23,6 +23,10 @@ import { clearRuntimeKey, setRuntimeKey } from "./core/providers/runtime-keys";
 import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
 import type { ColorMode, Settings } from "./core/settings/types";
+
+// Module-level so the array identity is stable across renders (StatusBar is
+// memoized; a fresh array each render would defeat it).
+const COMMAND_HINTS = ["/help", "/status", "/clear", "/model", "/compact"];
 
 function App() {
   // App-owned state: boot-banner key input + app-wide config + chrome.
@@ -99,7 +103,9 @@ function App() {
   const activeProfile =
     (activeProviderId ? getProvider(activeProviderId) : null) ?? anthropicProfile;
 
-  const providerProfiles = listProviders();
+  // Memoized: listProviders() returns a fresh array each call, which would
+  // defeat memoization of the panels that receive it.
+  const providerProfiles = useMemo(() => listProviders(), []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -220,75 +226,103 @@ function App() {
     triggerReboot();
   }
 
-  async function openSettings() {
+  const openSettings = useCallback(() => {
     setSettingsOpen(true);
     void probeProviderStates();
-  }
+  }, [probeProviderStates]);
 
-  // CP6 Parameter 10 final clause: after the user picks, persist
-  // main_provider and deep-link to the Providers panel pre-focused on the
-  // chosen provider — unconditionally, so the user confirms which key is
-  // wired to which provider even when one already exists. When no key is
-  // configured, also open the inline editor; when one already exists, set a
-  // visual highlight (ring + scroll-into-view) so the user can see which
-  // row their existing key is wired to.
-  async function handleWelcomeSelect(providerId: string) {
-    const updated = await saveSettings({ main_provider: providerId });
-    setSettings(updated);
-    setWelcomeOpen(false);
-    await probeProviderStates();
-    if (welcomeHasAnyKey) {
-      setProviderEditId(null);
-      setProviderHighlightId(providerId);
-      // Fade after a few seconds so the ring doesn't linger on subsequent
-      // Settings opens.
-      setTimeout(() => setProviderHighlightId(null), 3500);
-    } else {
-      setProviderEditId(providerId);
-      setProviderHighlightId(null);
-    }
-    setSettingsOpen(true);
-  }
-
-  function closeSettings() {
+  const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-  }
+  }, []);
 
-  async function handleMainProviderModelChange(providerId: string, modelId: string) {
-    if (providerId === settings.main_provider && modelId === settings.main_model) return;
-    const updated = await saveSettings({
-      main_provider: providerId,
-      main_model: modelId,
-    });
-    setSettings(updated);
-    setToast(`Main updated — ${providerId} / ${modelId}. Applies on next session.`);
-    setTimeout(() => setToast(null), 3500);
-  }
+  // Stable onOpenChange for the memoized SettingsModal (an inline arrow would
+  // defeat its memoization).
+  const handleSettingsOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) openSettings();
+      else closeSettings();
+    },
+    [openSettings, closeSettings],
+  );
 
-  async function handleAuxiliaryProviderModelChange(providerId: string, modelId: string) {
-    if (providerId === settings.auxiliary_provider && modelId === settings.auxiliary_model) return;
-    const updated = await saveSettings({
-      auxiliary_provider: providerId,
-      auxiliary_model: modelId,
-    });
-    setSettings(updated);
-    setToast(`Auxiliary updated — ${providerId} / ${modelId}.`);
-    setTimeout(() => setToast(null), 2500);
-  }
+  // After the user picks in First-Run Welcome, persist main_provider and
+  // deep-link to the Providers panel pre-focused on the chosen provider —
+  // unconditionally, so the user confirms which key is wired to which provider
+  // even when one already exists. When no key is configured, also open the
+  // inline editor; when one already exists, set a visual highlight (ring +
+  // scroll-into-view) so the user can see which row their existing key is on.
+  const handleWelcomeSelect = useCallback(
+    async (providerId: string) => {
+      const updated = await saveSettings({ main_provider: providerId });
+      setSettings(updated);
+      setWelcomeOpen(false);
+      await probeProviderStates();
+      if (welcomeHasAnyKey) {
+        setProviderEditId(null);
+        setProviderHighlightId(providerId);
+        // Fade after a few seconds so the ring doesn't linger on subsequent
+        // Settings opens.
+        setTimeout(() => setProviderHighlightId(null), 3500);
+      } else {
+        setProviderEditId(providerId);
+        setProviderHighlightId(null);
+      }
+      setSettingsOpen(true);
+    },
+    [
+      welcomeHasAnyKey,
+      probeProviderStates,
+      setWelcomeOpen,
+      setProviderEditId,
+      setProviderHighlightId,
+    ],
+  );
 
-  async function handleThemeChange(newThemeId: string) {
-    if (newThemeId === settings.selected_theme) return;
-    const updated = await saveSettings({ selected_theme: newThemeId });
-    setSettings(updated);
-    setToast(`Theme updated — ${newThemeId}.`);
-    setTimeout(() => setToast(null), 2500);
-  }
+  const handleMainProviderModelChange = useCallback(
+    async (providerId: string, modelId: string) => {
+      if (providerId === settings.main_provider && modelId === settings.main_model) return;
+      const updated = await saveSettings({ main_provider: providerId, main_model: modelId });
+      setSettings(updated);
+      setToast(`Main updated — ${providerId} / ${modelId}. Applies on next session.`);
+      setTimeout(() => setToast(null), 3500);
+    },
+    [settings.main_provider, settings.main_model],
+  );
 
-  async function handleColorModeChange(newMode: ColorMode) {
-    if (newMode === settings.color_mode) return;
-    const updated = await saveSettings({ color_mode: newMode });
-    setSettings(updated);
-  }
+  const handleAuxiliaryProviderModelChange = useCallback(
+    async (providerId: string, modelId: string) => {
+      if (providerId === settings.auxiliary_provider && modelId === settings.auxiliary_model)
+        return;
+      const updated = await saveSettings({
+        auxiliary_provider: providerId,
+        auxiliary_model: modelId,
+      });
+      setSettings(updated);
+      setToast(`Auxiliary updated — ${providerId} / ${modelId}.`);
+      setTimeout(() => setToast(null), 2500);
+    },
+    [settings.auxiliary_provider, settings.auxiliary_model],
+  );
+
+  const handleThemeChange = useCallback(
+    async (newThemeId: string) => {
+      if (newThemeId === settings.selected_theme) return;
+      const updated = await saveSettings({ selected_theme: newThemeId });
+      setSettings(updated);
+      setToast(`Theme updated — ${newThemeId}.`);
+      setTimeout(() => setToast(null), 2500);
+    },
+    [settings.selected_theme],
+  );
+
+  const handleColorModeChange = useCallback(
+    async (newMode: ColorMode) => {
+      if (newMode === settings.color_mode) return;
+      const updated = await saveSettings({ color_mode: newMode });
+      setSettings(updated);
+    },
+    [settings.color_mode],
+  );
 
   const backendLabel =
     backend === "anthropic-api"
@@ -303,7 +337,6 @@ function App() {
     hasPendingApproval ||
     (backend === "echo-fallback" && bootError !== null);
   const activityLabel = !ready ? "Connecting…" : streaming ? "Streaming…" : "Ready";
-  const COMMAND_HINTS = ["/help", "/status", "/clear", "/model", "/compact"];
 
   return (
     <main className="flex h-screen bg-background text-foreground">
@@ -374,7 +407,7 @@ function App() {
 
         <SettingsModal
           open={settingsOpen}
-          onOpenChange={(open) => (open ? openSettings() : closeSettings())}
+          onOpenChange={handleSettingsOpenChange}
           settings={settings}
           currentMainProvider={settings.main_provider}
           currentModel={settings.main_model}

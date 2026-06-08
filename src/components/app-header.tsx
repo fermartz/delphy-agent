@@ -1,4 +1,5 @@
 import { Settings as SettingsIcon } from "lucide-react";
+import { memo } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import { ColorModeToggle } from "@/components/color-mode-toggle";
 import { ThemeSwitcher } from "@/components/theme-switcher";
@@ -16,7 +17,7 @@ interface AppHeaderProps {
 }
 
 /** Top chrome: brand + theme switcher + color-mode toggle + settings gear. */
-export function AppHeader({
+export const AppHeader = memo(function AppHeader({
   themes,
   selectedThemeId,
   onThemeChange,
@@ -50,4 +51,4 @@ export function AppHeader({
       </div>
     </header>
   );
-}
+});

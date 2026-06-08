@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,7 +65,7 @@ export interface SettingsModalProps {
 
 const COLOR_MODES: readonly ColorMode[] = ["light", "dark", "system"];
 
-export function SettingsModal({
+function SettingsModalInner({
   open,
   onOpenChange,
   settings,
@@ -643,3 +643,5 @@ function recordFromLines(text: string): Record<string, string> {
   }
   return out;
 }
+
+export const SettingsModal = memo(SettingsModalInner);

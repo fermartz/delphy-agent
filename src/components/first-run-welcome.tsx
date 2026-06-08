@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +33,7 @@ export interface FirstRunWelcomeProps {
  * Providers panel pre-focused on the chosen provider (Parameter 10 final
  * sentence — unconditional, even when a key already exists).
  */
-export function FirstRunWelcome({
+export const FirstRunWelcome = memo(function FirstRunWelcome({
   open,
   profiles,
   preselectId,
@@ -82,4 +83,4 @@ export function FirstRunWelcome({
       </DialogContent>
     </Dialog>
   );
-}
+});

@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import type { SessionListEntry } from "@/core/db/sessions";
 
@@ -25,7 +26,7 @@ function titleFor(entry: SessionListEntry): string {
   return entry.id.slice(0, 12);
 }
 
-export function SessionSidebar({
+export const SessionSidebar = memo(function SessionSidebar({
   sessions,
   activeSessionId,
   onSelect,
@@ -76,4 +77,4 @@ export function SessionSidebar({
       </div>
     </aside>
   );
-}
+});

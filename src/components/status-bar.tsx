@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 interface StatusBarProps {
   brand: string;
   model: string;
@@ -29,7 +31,7 @@ function contextTintClass(percent: number): string {
  * indicator (right). Row 2 lists the available slash-command hints.
  * Background tint matches the chat input below so they read as one panel.
  */
-export function StatusBar({
+export const StatusBar = memo(function StatusBar({
   brand,
   model,
   activity,
@@ -66,4 +68,4 @@ export function StatusBar({
       </div>
     </div>
   );
-}
+});
