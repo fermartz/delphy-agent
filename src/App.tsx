@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppHeader } from "@/components/app-header";
 import { BootBanner } from "@/components/boot-banner";
 import { ChatStream } from "@/components/chat-stream";
@@ -12,9 +12,9 @@ import { Toast } from "@/components/toast";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { useProviders } from "@/hooks/use-providers";
+import { bootOptsFor, useSession } from "@/hooks/use-session";
 import { useThemes } from "@/hooks/use-themes";
-import type { BootErrorKind } from "./core/adapters/direct-api";
-import { type ActiveBackend, startActiveBackend } from "./core/boot";
+import { startActiveBackend } from "./core/boot";
 import { reduceChatItems } from "./core/chat/items-reducer";
 import { type ChatItem, projectMessagesToChatItems } from "./core/chat-projection";
 import { type CommandContext, dispatchInput } from "./core/commands";
@@ -26,7 +26,6 @@ import { clearRuntimeKey, setRuntimeKey } from "./core/providers/runtime-keys";
 import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
 import type { ColorMode, Settings } from "./core/settings/types";
-import type { Session } from "./core/types";
 
 let itemCounter = 0;
 function nextItemId(): string {
@@ -35,26 +34,45 @@ function nextItemId(): string {
 }
 
 function App() {
+  // App-owned UI + chat state (session-lifecycle state lives in useSession).
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [backend, setBackend] = useState<ActiveBackend | null>(null);
-  const [bootError, setBootError] = useState<{ kind: BootErrorKind; message: string } | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
-  const [rebootCounter, setRebootCounter] = useState(0);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const { themes } = useThemes({
-    selectedThemeId: settings.selected_theme,
-    colorMode: settings.color_mode,
+  const [sessionList, setSessionList] = useState<SessionListEntry[]>([]);
+  const [sessionTokens, setSessionTokens] = useState<{ in: number; out: number; cached: number }>({
+    in: 0,
+    out: 0,
+    cached: 0,
   });
+  const [contextPercent, setContextPercent] = useState(0);
+  // First-Run Welcome state. Trigger is the single condition
+  // `settings.main_provider == null` (Parameter 10).
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const [welcomePreselectId, setWelcomePreselectId] = useState<string | null>(null);
+  const [welcomeHasAnyKey, setWelcomeHasAnyKey] = useState(false);
+
+  // Toast + chat-reset callbacks shared into the hooks below.
   const mcpToast = useCallback((message: string) => {
     setToast(message);
     setTimeout(() => setToast(null), 4000);
   }, []);
+  const resetConversation = useCallback(() => {
+    setItems([]);
+    setSessionTokens({ in: 0, out: 0, cached: 0 });
+    setContextPercent(0);
+  }, []);
+  const stopStreaming = useCallback(() => setStreaming(false), []);
+  const clearKeyInput = useCallback(() => setKeyInput(""), []);
+
+  const { themes } = useThemes({
+    selectedThemeId: settings.selected_theme,
+    colorMode: settings.color_mode,
+  });
   const {
     mcpStatuses,
     mcpConfigs,
@@ -64,23 +82,6 @@ function App() {
     handleMcpRestart,
     handleMcpToggle,
   } = useMcpServers({ onToast: mcpToast });
-  const [sessionList, setSessionList] = useState<SessionListEntry[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
-  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
-  const [resumeRequest, setResumeRequest] = useState<
-    { kind: "fresh" } | { kind: "resume"; id: string } | null
-  >(null);
-
-  // Profile for the current active provider, derived from boot state. Falls
-  // back to Anthropic so legacy code paths (BootBanner, /v1/models fetch)
-  // keep working before the user completes First-Run Welcome in CP6.
-  const activeProfile =
-    (activeProviderId ? getProvider(activeProviderId) : null) ?? anthropicProfile;
-
-  // CP4: Providers panel state + per-session token usage accumulator. The
-  // states map is keyed by provider id; entries materialize when the user
-  // opens Settings and we probe each profile's keychain entry.
   const {
     providerStates,
     providerEditId,
@@ -93,32 +94,37 @@ function App() {
     handleProviderTest,
     handleProviderRemove,
   } = useProviders({ settings });
-  const [sessionTokens, setSessionTokens] = useState<{
-    in: number;
-    out: number;
-    cached: number;
-  }>({ in: 0, out: 0, cached: 0 });
-  const [contextPercent, setContextPercent] = useState(0);
-  // CP6 First-Run Welcome state. Trigger is the single condition
-  // `settings.main_provider == null` (Parameter 10).
-  const [welcomeOpen, setWelcomeOpen] = useState(false);
-  const [welcomePreselectId, setWelcomePreselectId] = useState<string | null>(null);
-  const [welcomeHasAnyKey, setWelcomeHasAnyKey] = useState(false);
-
-  const providerProfiles = listProviders();
-  const sessionRef = useRef<Session | null>(null);
+  const {
+    backend,
+    setBackend,
+    bootError,
+    setBootError,
+    ready,
+    setReady,
+    activeSessionId,
+    setActiveSessionId,
+    sessionStartedAt,
+    setSessionStartedAt,
+    activeProviderId,
+    setActiveProviderId,
+    resumeRequest,
+    setResumeRequest,
+    rebootCounter,
+    sessionRef,
+    triggerReboot,
+    startFreshSession,
+    switchToSession,
+    restartSession,
+  } = useSession({ resetConversation, stopStreaming, clearKeyInput });
   const { scrollRef, onScroll: handleScroll } = useChatScroll(items);
 
-  function triggerReboot() {
-    setItems([]);
-    setReady(false);
-    setStreaming(false);
-    setKeyInput("");
-    setSessionTokens({ in: 0, out: 0, cached: 0 });
-    setContextPercent(0);
-    setSessionStartedAt(null);
-    setRebootCounter((c) => c + 1);
-  }
+  // Profile for the current active provider, derived from boot state. Falls
+  // back to Anthropic so legacy code paths (BootBanner, /v1/models fetch) keep
+  // working before the user completes First-Run Welcome.
+  const activeProfile =
+    (activeProviderId ? getProvider(activeProviderId) : null) ?? anthropicProfile;
+
+  const providerProfiles = listProviders();
 
   async function refreshSessionList() {
     try {
@@ -129,50 +135,12 @@ function App() {
     }
   }
 
-  function startFreshSession() {
-    setResumeRequest({ kind: "fresh" });
-    setItems([]);
-    setReady(false);
-    setStreaming(false);
-    setSessionTokens({ in: 0, out: 0, cached: 0 });
-    setContextPercent(0);
-    setSessionStartedAt(null);
-    setRebootCounter((c) => c + 1);
-  }
-
-  function switchToSession(id: string) {
-    if (id === activeSessionId) return;
-    setResumeRequest({ kind: "resume", id });
-    setItems([]);
-    setReady(false);
-    setStreaming(false);
-    setSessionTokens({ in: 0, out: 0, cached: 0 });
-    setContextPercent(0);
-    setSessionStartedAt(null);
-    setRebootCounter((c) => c + 1);
-  }
-
-  // Restart the session WITHOUT clearing items. Used by /model <id> so a
-  // model change takes effect on the next message without wiping the user's
-  // visible chat history. Distinct from triggerReboot() which wipes.
-  function restartSession() {
-    setReady(false);
-    setStreaming(false);
-    setRebootCounter((c) => c + 1);
-  }
-
   // biome-ignore lint/correctness/useExhaustiveDependencies: rebootCounter is an effect-trigger; its value isn't read inside the effect, but bumping it re-runs the boot flow (used after Save + Change API key).
   useEffect(() => {
     let active = true;
 
     (async () => {
-      const bootOpts =
-        resumeRequest?.kind === "resume"
-          ? { resumeSessionId: resumeRequest.id }
-          : resumeRequest?.kind === "fresh"
-            ? { freshSession: true }
-            : {};
-      const result = await startActiveBackend(bootOpts);
+      const result = await startActiveBackend(bootOptsFor(resumeRequest));
       if (!active) {
         await result.session.close();
         return;
