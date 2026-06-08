@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Loader2, Send, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { BootBanner } from "@/components/boot-banner";
 import { BrandLogo } from "@/components/brand-logo";
 import { ChatIcon } from "@/components/chat-icon";
+import { ChatMessage } from "@/components/chat-message";
 import { ColorModeToggle } from "@/components/color-mode-toggle";
 import { FirstRunWelcome } from "@/components/first-run-welcome";
-import MarkdownText from "@/components/markdown-text";
 import type { ProviderRowState } from "@/components/providers-panel";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { SettingsModal } from "@/components/settings-modal";
@@ -14,6 +15,7 @@ import { ThemeSwitcher } from "@/components/theme-switcher";
 import { Button } from "@/components/ui/button";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
+import { reduceChatItems } from "./core/chat/items-reducer";
 import { type ChatItem, projectMessagesToChatItems } from "./core/chat-projection";
 import { type CommandContext, dispatchInput } from "./core/commands";
 import { getSession, listSessions, type SessionListEntry } from "./core/db/sessions";
@@ -30,7 +32,7 @@ import { clearRuntimeKey, getRuntimeKey, setRuntimeKey } from "./core/providers/
 import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
 import type { ColorMode, Settings } from "./core/settings/types";
-import type { RuntimeErrorKind, Session } from "./core/types";
+import type { Session } from "./core/types";
 import { applyTheme } from "./themes/apply";
 import { injectThemeStyles } from "./themes/inject";
 import { loadAllThemes } from "./themes/loader";
@@ -52,28 +54,6 @@ async function resolveProviderApiKey(secretKey: string): Promise<string | null> 
   }
   const runtime = getRuntimeKey(secretKey);
   return runtime && runtime.length > 0 ? runtime : null;
-}
-
-function appendTextToInFlight(items: ChatItem[], delta: string): ChatItem[] {
-  const last = items[items.length - 1];
-  if (last?.kind === "assistant-text" && last.status === "streaming") {
-    return items.map((it, idx) =>
-      idx === items.length - 1 && it.kind === "assistant-text"
-        ? { ...it, text: it.text + delta }
-        : it,
-    );
-  }
-  return [...items, { kind: "assistant-text", id: nextItemId(), text: delta, status: "streaming" }];
-}
-
-function finalizeInFlight(items: ChatItem[], status: "complete" | "error"): ChatItem[] {
-  const last = items[items.length - 1];
-  if (last?.kind === "assistant-text" && last.status === "streaming") {
-    return items.map((it, idx) =>
-      idx === items.length - 1 && it.kind === "assistant-text" ? { ...it, status } : it,
-    );
-  }
-  return items;
 }
 
 function App() {
@@ -249,60 +229,14 @@ function App() {
       for await (const event of result.session.events) {
         if (!active) break;
 
+        // Items projection is a pure reducer (core/chat/items-reducer). Events
+        // that don't touch items return the same reference, so this is a no-op
+        // render for usage/context_usage/thinking.
+        setItems((prev) => reduceChatItems(prev, event, nextItemId));
+
+        // Side effects that lived alongside the item cases stay here.
         switch (event.type) {
-          case "text":
-            setItems((prev) => appendTextToInFlight(prev, event.delta));
-            break;
-
-          case "approval_request":
-            setItems((prev) => [
-              ...finalizeInFlight(prev, "complete"),
-              {
-                kind: "approval",
-                id: event.id,
-                action: event.action,
-                payload: event.payload,
-              },
-            ]);
-            break;
-
-          case "tool_call":
-            setItems((prev) => [
-              ...finalizeInFlight(prev, "complete"),
-              { kind: "tool-call", id: event.id, name: event.name, input: event.input },
-            ]);
-            break;
-
-          case "tool_result":
-            setItems((prev) => {
-              const updated = finalizeInFlight(prev, "complete");
-              const callIdx = updated.findIndex(
-                (it) => it.kind === "tool-call" && it.id === event.id,
-              );
-              const toolName =
-                callIdx !== -1 && updated[callIdx].kind === "tool-call"
-                  ? updated[callIdx].name
-                  : "tool";
-              const resultItem: ChatItem = {
-                kind: "tool-result",
-                id: event.id,
-                name: toolName,
-                output: event.output,
-                isError: event.isError,
-              };
-              if (callIdx !== -1) {
-                const next = [...updated];
-                next[callIdx] = resultItem;
-                return next;
-              }
-              return [...updated, resultItem];
-            });
-            break;
-
           case "done":
-            setItems((prev) =>
-              finalizeInFlight(prev, event.reason === "complete" ? "complete" : "error"),
-            );
             setStreaming(false);
             void refreshSessionList();
             break;
@@ -320,27 +254,7 @@ function App() {
             break;
 
           case "error":
-            setItems((prev) => [
-              ...finalizeInFlight(prev, "error"),
-              {
-                kind: "runtime-error",
-                id: nextItemId(),
-                errorKind: event.kind ?? "unknown",
-                message: event.error.message,
-              },
-            ]);
             setStreaming(false);
-            break;
-
-          case "system_message":
-            // Finalize any in-flight streaming assistant message first, so the
-            // system item lands cleanly between turns. A subsequent text event
-            // (e.g., the actual model reply after auto-compaction) will start
-            // a fresh streaming assistant bubble.
-            setItems((prev) => [
-              ...finalizeInFlight(prev, "complete"),
-              { kind: "system", id: nextItemId(), text: event.text, intent: event.intent },
-            ]);
             break;
 
           default:
@@ -437,7 +351,7 @@ function App() {
     return cleanup;
   }, [themesLoaded, themesVersion, settings.selected_theme, settings.color_mode]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: items is an effect-trigger — its array identity changes on every text delta via appendTextToInFlight, which is exactly when auto-scroll should re-run.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: items is an effect-trigger — its array identity changes on every text delta via reduceChatItems, which is exactly when auto-scroll should re-run.
   useEffect(() => {
     if (!stickyBottomRef.current) return;
     const el = scrollRef.current;
@@ -939,7 +853,13 @@ function App() {
               {items.map((it) => (
                 <li key={it.id} className="flex gap-2">
                   <ChatIcon item={it} />
-                  <div className="flex-1">{renderItem(it, handleApproval, handleChangeKey)}</div>
+                  <div className="flex-1">
+                    <ChatMessage
+                      item={it}
+                      onApproval={handleApproval}
+                      onChangeKey={handleChangeKey}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1033,207 +953,6 @@ function App() {
       </div>
     </main>
   );
-}
-
-function BootBanner({
-  errorKind,
-  errorMessage,
-  keyInput,
-  setKeyInput,
-  onSave,
-  onRetry,
-  onOpenProviders,
-  saving,
-  providerLabel,
-}: {
-  errorKind: BootErrorKind;
-  errorMessage: string;
-  keyInput: string;
-  setKeyInput: (v: string) => void;
-  onSave: () => void;
-  onRetry: () => void;
-  onOpenProviders: () => void;
-  saving: boolean;
-  providerLabel: string;
-}) {
-  if (errorKind === "unknown") {
-    return (
-      <div className="border-b border-border bg-muted px-4 py-3 text-sm text-foreground">
-        <div className="font-medium">Backend failed to start.</div>
-        <div className="mt-1 text-xs text-muted-foreground">{errorMessage}</div>
-        <Button type="button" variant="destructive" size="sm" onClick={onRetry} className="mt-2">
-          Try again
-        </Button>
-      </div>
-    );
-  }
-
-  const isLinuxFallback = errorKind === "secure-storage-unavailable";
-
-  return (
-    <div className="border-b border-border bg-muted px-4 py-3 text-sm text-foreground">
-      <div className="font-medium">
-        {isLinuxFallback
-          ? "Secure storage unavailable — session-only key required"
-          : `${providerLabel} API key needed`}
-      </div>
-      <div className="mt-1 text-xs text-muted-foreground">
-        {isLinuxFallback ? (
-          <>
-            No Secret Service daemon (GNOME Keyring / KWallet) is running on this Linux system. The
-            key you enter will live only in memory for this session and won't be saved. To enable
-            persistent storage, install GNOME Keyring or KWallet, then reload.
-          </>
-        ) : (
-          <>
-            Enter the key inline below, or open Settings → Providers to manage keys for all
-            registered providers. Keys are stored in your OS keychain (macOS Keychain / Windows
-            Credential Manager / Linux Secret Service).
-          </>
-        )}
-      </div>
-      <form
-        className="mt-2 flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          onSave();
-        }}
-      >
-        <input
-          type="password"
-          autoComplete="off"
-          spellCheck="false"
-          value={keyInput}
-          onChange={(e) => setKeyInput(e.currentTarget.value)}
-          placeholder={`${providerLabel} API key`}
-          disabled={saving}
-          className="flex-1 rounded border border-border bg-background px-3 py-1 text-xs text-foreground focus:border-primary focus:outline-none disabled:opacity-50"
-        />
-        <Button type="submit" size="sm" disabled={saving || keyInput.trim().length === 0}>
-          {saving ? "Saving..." : isLinuxFallback ? "Use for session" : "Save"}
-        </Button>
-        {!isLinuxFallback ? (
-          <Button type="button" size="sm" variant="outline" onClick={onOpenProviders}>
-            Open Providers
-          </Button>
-        ) : null}
-      </form>
-    </div>
-  );
-}
-
-function renderItem(
-  it: ChatItem,
-  onApproval: (id: string, allowed: boolean) => void,
-  onChangeKey: () => void,
-): React.ReactNode {
-  switch (it.kind) {
-    case "user-text":
-      return (
-        <span className="inline-block rounded-md bg-muted px-3 py-1.5 text-sm text-foreground whitespace-pre-wrap">
-          {it.text}
-        </span>
-      );
-    case "assistant-text":
-      return (
-        <div className={`text-sm ${it.status === "error" ? "text-destructive" : ""}`}>
-          <MarkdownText>{it.text}</MarkdownText>
-        </div>
-      );
-    case "approval":
-      return (
-        <div className="rounded border border-border bg-muted px-3 py-2 text-sm">
-          <div className="font-medium text-foreground">
-            {it.verdict
-              ? `Approval ${it.verdict} — ${it.action}`
-              : `Agent wants to use ${it.action}`}
-          </div>
-          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-muted-foreground">
-            {previewPayload(it.payload)}
-          </pre>
-          {!it.verdict ? (
-            <div className="mt-2 flex gap-2">
-              <Button type="button" size="sm" onClick={() => onApproval(it.id, true)}>
-                Approve
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => onApproval(it.id, false)}
-              >
-                Deny
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      );
-    case "tool-call":
-      return (
-        <div className="font-mono text-sm text-muted-foreground">
-          → {it.name}({previewPayload(it.input)})
-        </div>
-      );
-    case "tool-result":
-      if (it.isError) {
-        return (
-          <pre className="font-mono text-sm whitespace-pre-wrap text-destructive">
-            {it.name} failed: {previewPayload(it.output)}
-          </pre>
-        );
-      }
-      return <div className="font-mono text-sm text-muted-foreground">{it.name} completed</div>;
-    case "runtime-error":
-      return (
-        <div className="rounded border border-border bg-muted px-3 py-2 text-sm">
-          <div className="font-medium text-foreground">{runtimeErrorTitle(it.errorKind)}</div>
-          <div className="mt-1 text-muted-foreground">{it.message}</div>
-          {it.errorKind === "invalid-key" ? (
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              onClick={onChangeKey}
-              className="mt-2"
-            >
-              Change API key
-            </Button>
-          ) : null}
-        </div>
-      );
-    case "system":
-      return (
-        <pre className="font-mono text-sm whitespace-pre-wrap text-muted-foreground italic">
-          {it.text}
-        </pre>
-      );
-  }
-}
-
-function runtimeErrorTitle(kind: RuntimeErrorKind): string {
-  switch (kind) {
-    case "invalid-key":
-      return "API key rejected";
-    case "rate-limited":
-      return "Rate limited";
-    case "network":
-      return "Network error";
-    case "model-deprecated":
-      return "Model unavailable";
-    case "unknown":
-      return "Unexpected error";
-  }
-}
-
-function previewPayload(payload: unknown): string {
-  if (typeof payload === "string")
-    return payload.length > 400 ? `${payload.slice(0, 400)}…` : payload;
-  try {
-    const json = JSON.stringify(payload, null, 2);
-    return json.length > 400 ? `${json.slice(0, 400)}…` : json;
-  } catch {
-    return String(payload);
-  }
 }
 
 export default App;
