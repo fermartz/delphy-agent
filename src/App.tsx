@@ -5,12 +5,12 @@ import { BootBanner } from "@/components/boot-banner";
 import { ChatStream } from "@/components/chat-stream";
 import { Composer } from "@/components/composer";
 import { FirstRunWelcome } from "@/components/first-run-welcome";
-import type { ProviderRowState } from "@/components/providers-panel";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
 import { Toast } from "@/components/toast";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
+import { useProviders } from "@/hooks/use-providers";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { reduceChatItems } from "./core/chat/items-reducer";
@@ -19,11 +19,8 @@ import { type CommandContext, dispatchInput } from "./core/commands";
 import { getSession, listSessions, type SessionListEntry } from "./core/db/sessions";
 import { getProvider, listProviders } from "./core/providers";
 import { anthropicProfile } from "./core/providers/anthropic";
-import {
-  fetchDiscovery,
-  invalidate as invalidateDiscovery,
-} from "./core/providers/discovery-cache";
-import { clearRuntimeKey, getRuntimeKey, setRuntimeKey } from "./core/providers/runtime-keys";
+import { resolveProviderApiKey } from "./core/providers/resolve-key";
+import { clearRuntimeKey, setRuntimeKey } from "./core/providers/runtime-keys";
 import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
 import type { ColorMode, Settings } from "./core/settings/types";
@@ -38,17 +35,6 @@ let itemCounter = 0;
 function nextItemId(): string {
   itemCounter += 1;
   return `i-${itemCounter}`;
-}
-
-async function resolveProviderApiKey(secretKey: string): Promise<string | null> {
-  try {
-    const stored = await invoke<string | null>("get_secret", { key: secretKey });
-    if (stored && stored.length > 0) return stored;
-  } catch {
-    // SECURE_STORAGE_UNAVAILABLE on bare Linux — fall through to runtime.
-  }
-  const runtime = getRuntimeKey(secretKey);
-  return runtime && runtime.length > 0 ? runtime : null;
 }
 
 function App() {
@@ -101,10 +87,18 @@ function App() {
   // CP4: Providers panel state + per-session token usage accumulator. The
   // states map is keyed by provider id; entries materialize when the user
   // opens Settings and we probe each profile's keychain entry.
-  const [providerStates, setProviderStates] = useState<Record<string, ProviderRowState>>({});
-  const [providerEditId, setProviderEditId] = useState<string | null>(null);
-  const [providerHighlightId, setProviderHighlightId] = useState<string | null>(null);
-  const [providerSaving, setProviderSaving] = useState(false);
+  const {
+    providerStates,
+    providerEditId,
+    setProviderEditId,
+    providerHighlightId,
+    setProviderHighlightId,
+    providerSaving,
+    probeProviderStates,
+    handleProviderSave,
+    handleProviderTest,
+    handleProviderRemove,
+  } = useProviders({ settings });
   const [sessionTokens, setSessionTokens] = useState<{
     in: number;
     out: number;
@@ -528,112 +522,6 @@ function App() {
     setSettings(updated);
   }
 
-  // CP4: Providers panel handlers. Status is probed lazily — when the modal
-  // first opens we read each profile's keychain entry to materialize the
-  // initial state. Test/Save/Remove keep the in-memory map in sync.
-
-  function previewKey(key: string): string {
-    return `***${key.slice(-4)}`;
-  }
-
-  async function probeProviderStates(): Promise<void> {
-    const entries = await Promise.all(
-      providerProfiles.map(async (p) => {
-        const stored = await resolveProviderApiKey(p.secretKey);
-        if (stored && stored.length > 0) {
-          return [p.id, { status: "configured" as const, preview: previewKey(stored) }] as const;
-        }
-        return [p.id, { status: "not-configured" as const }] as const;
-      }),
-    );
-    setProviderStates(Object.fromEntries(entries));
-  }
-
-  function handleProviderEdit(providerId: string | null) {
-    setProviderEditId(providerId);
-  }
-
-  async function handleProviderSave(providerId: string, key: string) {
-    const profile = getProvider(providerId);
-    if (!profile) return;
-    setProviderSaving(true);
-    try {
-      try {
-        await invoke("set_secret", { key: profile.secretKey, value: key });
-      } catch {
-        // Linux SECURE_STORAGE_UNAVAILABLE fallback — hold in process memory.
-        setRuntimeKey(profile.secretKey, key);
-      }
-      setProviderStates((prev) => ({
-        ...prev,
-        [providerId]: { status: "configured", preview: previewKey(key) },
-      }));
-      setProviderEditId(null);
-    } finally {
-      setProviderSaving(false);
-    }
-  }
-
-  async function handleProviderTest(providerId: string) {
-    const profile = getProvider(providerId);
-    if (!profile) return;
-    const apiKey = await resolveProviderApiKey(profile.secretKey);
-    if (!apiKey) {
-      setProviderStates((prev) => ({
-        ...prev,
-        [providerId]: { status: "not-configured" },
-      }));
-      return;
-    }
-    setProviderStates((prev) => ({
-      ...prev,
-      [providerId]: { ...(prev[providerId] ?? { status: "configured" }), status: "testing" },
-    }));
-    // Force re-discovery on Test so the user gets a true round-trip rather
-    // than a cache hit (the cache was just warmed minutes ago).
-    invalidateDiscovery(providerId);
-    const result = await fetchDiscovery(providerId, apiKey, settings);
-    if (result.status === "ok" && result.models.length > 0) {
-      setProviderStates((prev) => ({
-        ...prev,
-        [providerId]: { status: "configured", preview: previewKey(apiKey) },
-      }));
-    } else if (result.status === "unsupported") {
-      setProviderStates((prev) => ({
-        ...prev,
-        [providerId]: {
-          ...(prev[providerId] ?? { status: "not-configured" }),
-          status: "invalid",
-          testError: "This provider does not support model discovery.",
-        },
-      }));
-    } else {
-      setProviderStates((prev) => ({
-        ...prev,
-        [providerId]: {
-          status: "invalid",
-          preview: previewKey(apiKey),
-          testError: result.error ?? `Test failed (${result.status}).`,
-        },
-      }));
-    }
-  }
-
-  async function handleProviderRemove(providerId: string) {
-    const profile = getProvider(providerId);
-    if (!profile) return;
-    try {
-      await invoke("delete_secret", { key: profile.secretKey });
-    } catch {
-      // ignore — runtime-key removal below also covers Linux fallback
-    }
-    clearRuntimeKey(profile.secretKey);
-    setProviderStates((prev) => ({
-      ...prev,
-      [providerId]: { status: "not-configured" },
-    }));
-  }
-
   const backendLabel =
     backend === "anthropic-api"
       ? "Anthropic (Claude)"
@@ -735,7 +623,7 @@ function App() {
           providerHighlightId={providerHighlightId}
           providerSaving={providerSaving}
           resolveApiKey={resolveProviderApiKey}
-          onProviderEdit={handleProviderEdit}
+          onProviderEdit={setProviderEditId}
           onProviderSave={handleProviderSave}
           onProviderTest={handleProviderTest}
           onProviderRemove={handleProviderRemove}
