@@ -8,6 +8,22 @@ When a decision is later reversed, do not delete the entry — add a new dated e
 
 ---
 
+## 2026-06-08 — App.tsx decomposed into focused components + hooks (BACKLOG #21)
+
+**Decision.** Refactor the ~1,240-line monolithic `App.tsx` chat shell into small presentational components + custom hooks + a pure event reducer, as a strictly behavior-preserving refactor shipped in ten independently-reviewed increments (CP1–CP10). `App.tsx` is now a ~450-line shell that composes hooks and renders child components.
+
+**Lives in.**
+- Pure logic: `src/core/chat/items-reducer.ts` (live `AgentEvent` → `ChatItem[]` folding, with an injected id generator so it stays pure), `src/core/chat/item-id.ts` (one shared UI id counter), `src/core/providers/resolve-key.ts` (keychain→runtime key resolution).
+- Presentational components: `src/components/{chat-message,boot-banner,app-header,chat-stream,composer,toast}.tsx`.
+- Hooks: `src/hooks/{use-mcp-servers,use-providers,use-themes,use-chat-scroll,use-session}.ts`. `useSession` owns the live session runtime — conversation items, streaming/turn state, token + context usage, the session list, lifecycle state (backend/bootError/ready/ids/age), the First-Run-Welcome trigger, and the boot effect + event loop; App injects only `clearKeyInput` + `onSettingsLoaded`.
+- Performance: the five non-chat surfaces (`AppHeader`, `SessionSidebar`, `StatusBar`, `FirstRunWelcome`, `SettingsModal`) are `React.memo`-wrapped under a stable-props discipline (module-level `COMMAND_HINTS`, `useMemo` provider list, `useCallback` handlers), so a streaming text delta re-renders only `App` + `ChatStream`.
+
+**Why.** `App.tsx` had accreted boot orchestration, the MCP/provider/theme lifecycles, the chat-item model, and ~25 handlers into one component; the next major slice (Codex adapter, BACKLOG #7) would thread another adapter path through it. Decomposing first lands that adapter on clean seams, makes the previously-untested orchestration logic unit-testable (the reducer, the MCP reconcile, and the session handlers + boot flow all gained tests — suite 352 → 411), and scopes streaming re-renders (the 645-line `SettingsModal` no longer re-renders on every token).
+
+**Alternatives considered.** Mirroring an external GUI client's fixed hook list (rejected — the hook set was derived from our own state clusters; we already had a tested command dispatcher and don't share that client's feature set). Introducing a global store / Zustand (rejected — out of scope; that's BACKLOG #2, its own decision). Folding in new features mid-refactor — a Stop button, input-history recall, a message queue (rejected — parked as BACKLOG #22; this slice is strictly behavior-preserving).
+
+**Process / verification.** Ten increments, each independently green and separately reviewed: CP1 reducer → CP2 ChatMessage/BootBanner → CP3 layout components → CP4 useMcpServers → CP5 useProviders + resolve-key → CP6 useThemes/useChatScroll → CP7 useSession state+handlers → CP8 useSession boot effect + event loop (parity-tested with a mocked backend + fake event stream) → CP9 memo boundaries → CP10 docs. Plan: `.hermes/plans/2026-06-08_app-decomposition.md` (plan-review APPROVED R3). Remaining verification: empirical React-DevTools profiler confirmation of the re-render scoping + the integrated boot/resume/reboot manual smoke (automated parity tests cover the logic).
+
 ## 2026-06-02 — First-class OpenAI-compatible providers: OpenRouter / Kimi / DeepSeek / Groq (BACKLOG #12.C)
 
 **Decision.** Promote four high-demand OpenAI-compatible providers from the generic Custom profile to first-class `ProviderProfile` modules: `openrouter` (`openrouter.ai/api/v1`), `kimi` (Moonshot **global** `api.moonshot.ai/v1`), `deepseek` (`api.deepseek.com`), `groq` (`api.groq.com/openai/v1`). Each is a thin `@ai-sdk/openai` wrapper with a **baked-in base URL** (the `xai.ts` pattern — no new dependency), its own keychain `secretKey` (`<id>_api_key`), a small curated model list + `GET {baseURL}/models` discovery, and `discoveryFingerprint: (apiKey) => apiKey`. They register in `providers/index.ts` and surface automatically as Providers-panel rows + Main/Aux picker options (everything iterates `listProviders()`); several can be configured simultaneously alongside Anthropic/OpenAI/Google/xAI.
