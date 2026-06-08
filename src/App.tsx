@@ -1,18 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2, Send, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { AppHeader } from "@/components/app-header";
 import { BootBanner } from "@/components/boot-banner";
-import { BrandLogo } from "@/components/brand-logo";
-import { ChatIcon } from "@/components/chat-icon";
-import { ChatMessage } from "@/components/chat-message";
-import { ColorModeToggle } from "@/components/color-mode-toggle";
+import { ChatStream } from "@/components/chat-stream";
+import { Composer } from "@/components/composer";
 import { FirstRunWelcome } from "@/components/first-run-welcome";
 import type { ProviderRowState } from "@/components/providers-panel";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
-import { ThemeSwitcher } from "@/components/theme-switcher";
-import { Button } from "@/components/ui/button";
+import { Toast } from "@/components/toast";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { reduceChatItems } from "./core/chat/items-reducer";
@@ -802,30 +799,14 @@ function App() {
         onNew={startFreshSession}
       />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-border px-4 py-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <BrandLogo size={40} />
-            <h1 className="shrink-0 text-lg font-semibold tracking-tight">Delphy Agent</h1>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <ThemeSwitcher
-              themes={themes}
-              selectedThemeId={settings.selected_theme}
-              onThemeChange={handleThemeChange}
-            />
-            <ColorModeToggle mode={settings.color_mode} onChange={handleColorModeChange} />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={openSettings}
-              aria-label="Open settings"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            >
-              <SettingsIcon className="h-3 w-3" />
-            </Button>
-          </div>
-        </header>
+        <AppHeader
+          themes={themes}
+          selectedThemeId={settings.selected_theme}
+          onThemeChange={handleThemeChange}
+          colorMode={settings.color_mode}
+          onColorModeChange={handleColorModeChange}
+          onOpenSettings={openSettings}
+        />
 
         {backend === "echo-fallback" && bootError ? (
           <BootBanner
@@ -841,30 +822,14 @@ function App() {
           />
         ) : null}
 
-        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
-          {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {backend === "anthropic-api"
-                ? "Type a message to chat with Claude."
-                : "Type a message to see the echo adapter stream."}
-            </p>
-          ) : (
-            <ul className="space-y-3">
-              {items.map((it) => (
-                <li key={it.id} className="flex gap-2">
-                  <ChatIcon item={it} />
-                  <div className="flex-1">
-                    <ChatMessage
-                      item={it}
-                      onApproval={handleApproval}
-                      onChangeKey={handleChangeKey}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <ChatStream
+          items={items}
+          backend={backend}
+          scrollRef={scrollRef}
+          onScroll={handleScroll}
+          onApproval={handleApproval}
+          onChangeKey={handleChangeKey}
+        />
 
         <StatusBar
           brand="delphy-agent"
@@ -875,33 +840,14 @@ function App() {
           contextPercent={contextPercent}
         />
 
-        <form
+        <Composer
+          input={input}
+          onInputChange={setInput}
           onSubmit={handleSubmit}
-          className="flex items-end gap-2 border-t border-border px-4 py-3"
-        >
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.currentTarget.value)}
-            placeholder={`Message ${backendLabel}...`}
-            disabled={inputDisabled}
-            className="flex-1 rounded-lg border-none bg-muted px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-          />
-          <Button
-            type="submit"
-            variant="ghost"
-            size="icon"
-            disabled={inputDisabled || input.trim().length === 0}
-            aria-label="Send message"
-            className="mb-0.5 shrink-0"
-          >
-            {streaming ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-          </Button>
-        </form>
+          disabled={inputDisabled}
+          streaming={streaming}
+          backendLabel={backendLabel}
+        />
 
         <FirstRunWelcome
           open={welcomeOpen}
@@ -945,11 +891,7 @@ function App() {
           onMcpToggle={handleMcpToggle}
         />
 
-        {toast ? (
-          <div className="pointer-events-none fixed top-6 left-1/2 -translate-x-1/2 rounded border border-primary/30 bg-primary px-4 py-2 text-xs text-primary-foreground shadow-lg">
-            {toast}
-          </div>
-        ) : null}
+        <Toast message={toast} />
       </div>
     </main>
   );
