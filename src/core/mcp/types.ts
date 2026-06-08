@@ -1,8 +1,10 @@
 /**
  * Full MCP server config shape per `docs/SPEC.md` § "MCP server configuration."
  * Persisted in the SQLite `mcp_servers` table since BACKLOG #4 (2026-05-30);
- * see `src/core/db/mcp.ts` + `src/core/mcp/store.ts`. The manager only boots
- * stdio configs; non-stdio entries are preserved but shown as unsupported.
+ * see `src/core/db/mcp.ts` + `src/core/mcp/store.ts`. The manager boots stdio
+ * (spawned child) and remote http/sse (Streamable HTTP + legacy SSE over the
+ * Rust-proxied fetch) configs since BACKLOG #9.A (2026-06-08); OAuth-authed
+ * remote servers are still pending (#9.B).
  */
 export type McpTransport = "stdio" | "http" | "sse";
 

@@ -29,6 +29,7 @@ tauri-plugin-window-state = "2"
 notify = "8.2.0"
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "rt", "macros"] }
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-http = "2.5.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

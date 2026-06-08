@@ -1,6 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { invoke } from "@tauri-apps/api/core";
+import { remoteUrlError } from "./store";
 import { TauriTransport } from "./tauri-transport";
+import { createRemoteTransport } from "./transport-factory";
 import type { McpServerConfig, McpServerStatus, McpTool, McpToolResult } from "./types";
 
 const INIT_TIMEOUT_MS = 30_000;
@@ -10,11 +14,16 @@ const INIT_TIMEOUT_MS = 30_000;
 // (We SIGKILL on timeout, so too short a budget kills npx mid-download and the
 // next attempt just re-downloads — it never warms the cache.)
 const CONNECT_TIMEOUT_MS = 120_000;
+// Remote (http/sse) servers have no `npx` cold-download to wait out, so they
+// get the shorter budget; a slow/unreachable endpoint becomes a `failed` row
+// the user can restart, rather than hanging two minutes.
+const REMOTE_CONNECT_TIMEOUT_MS = 30_000;
 const CALL_TOOL_TIMEOUT_MS = 30_000;
 
 interface ConnectedServer {
   config: McpServerConfig;
   client: Client;
+  transport: Transport;
   tools: McpTool[];
 }
 
@@ -55,23 +64,39 @@ class McpManager {
   async removeServer(id: string): Promise<void> {
     const entry = this.servers.get(id);
     if (entry?.kind === "connected") {
-      // Close the SDK client first (-> transport.close() -> unsubscribes the
-      // Tauri listeners) BEFORE killing the child, so the expected stdout-EOF
-      // `exit` event isn't observed by a live transport and reported as an
-      // error (and so no stale listener survives to see a replacement's events
-      // on restart).
+      await this.disconnect(entry.data);
+    }
+    this.servers.delete(id);
+  }
+
+  /**
+   * Tear down one connected server. Streamable HTTP gets an explicit
+   * `terminateSession()` (DELETE) to end the server-side session before close;
+   * servers that don't support it answer 405 and we ignore it. The SDK client
+   * is closed (-> transport.close() -> unsubscribes any Tauri listeners) BEFORE
+   * stopping a stdio child, so the expected stdout-EOF `exit` isn't observed by
+   * a live transport and surfaced as an error. Only stdio has a child to stop.
+   */
+  private async disconnect(server: ConnectedServer): Promise<void> {
+    if (server.transport instanceof StreamableHTTPClientTransport) {
       try {
-        await entry.data.client.close();
+        await server.transport.terminateSession();
       } catch {
-        // ignore
+        // ignore — server may not support session termination (405)
       }
+    }
+    try {
+      await server.client.close();
+    } catch {
+      // ignore
+    }
+    if (server.config.transport === "stdio") {
       try {
-        await invoke("stop_mcp_server", { handle: id });
+        await invoke("stop_mcp_server", { handle: server.config.id });
       } catch {
         // ignore
       }
     }
-    this.servers.delete(id);
   }
 
   async restartServer(config: McpServerConfig): Promise<void> {
@@ -143,17 +168,7 @@ class McpManager {
     await Promise.allSettled(
       entries.map(async (entry) => {
         if (entry.kind !== "connected") return;
-        const handle = entry.data.config.id;
-        try {
-          await entry.data.client.close();
-        } catch {
-          // ignore
-        }
-        try {
-          await invoke("stop_mcp_server", { handle });
-        } catch (err) {
-          console.warn(`[mcp-manager] stop_mcp_server(${handle}) failed:`, err);
-        }
+        await this.disconnect(entry.data);
       }),
     );
     this.servers.clear();
@@ -167,19 +182,35 @@ class McpManager {
       return;
     }
 
-    if (config.transport !== "stdio") {
-      this.servers.set(config.id, {
-        kind: "failed",
-        data: { config, error: `Transport "${config.transport}" is not yet supported` },
-      });
-      return;
+    const isStdio = config.transport === "stdio";
+    // Enforce the remote-URL gate at the boot boundary, not just in the Settings
+    // form: persisted/migrated configs reach bootOne without ever passing
+    // through validateMcpConfig, so a non-https non-loopback URL could otherwise
+    // slip into createRemoteTransport.
+    if (!isStdio) {
+      const urlErr = remoteUrlError(config.url);
+      if (urlErr) {
+        this.servers.set(config.id, { kind: "failed", data: { config, error: urlErr } });
+        return;
+      }
     }
 
-    let transport: TauriTransport | null = null;
+    let transport: Transport | null = null;
     try {
       const resolved = await this.resolveSecrets(config);
-      const handle = await this.spawnWithTimeout(resolved);
-      transport = new TauriTransport(handle);
+
+      let connectTimeout: number;
+      if (isStdio) {
+        const handle = await this.spawnWithTimeout(resolved);
+        transport = new TauriTransport(handle);
+        connectTimeout = CONNECT_TIMEOUT_MS;
+      } else {
+        // http/sse: build an SDK web transport routed through the Rust-proxied
+        // fetch (no child to spawn). No npx cold-start, so the shorter budget.
+        transport = createRemoteTransport(resolved);
+        connectTimeout = REMOTE_CONNECT_TIMEOUT_MS;
+      }
+
       const client = new Client({ name: "delphy-agent", version: "0.0.0" }, { capabilities: {} });
 
       // Pass the timeout INTO the SDK's initialize request — the client applies
@@ -187,8 +218,8 @@ class McpManager {
       // "-32001: Request timed out" before our outer withTimeout fires. The
       // outer withTimeout stays as a backstop in case connect hangs entirely.
       await withTimeout(
-        client.connect(transport, { timeout: CONNECT_TIMEOUT_MS }),
-        CONNECT_TIMEOUT_MS,
+        client.connect(transport, { timeout: connectTimeout }),
+        connectTimeout,
         `connect ${config.id}`,
       );
 
@@ -206,36 +237,67 @@ class McpManager {
         inputSchema: t.inputSchema,
       }));
 
-      this.servers.set(config.id, { kind: "connected", data: { config, client, tools } });
+      this.servers.set(config.id, {
+        kind: "connected",
+        data: { config, client, transport, tools },
+      });
     } catch (err) {
-      // Prefer the child's exit reason (e.g. an npm 404 on the last stderr
-      // line) over a generic "Connection closed" from the SDK when the process
-      // died during connect.
-      const error = transport?.exitReason ?? (err instanceof Error ? err.message : String(err));
+      // Prefer the stdio child's exit reason (e.g. an npm 404 on the last
+      // stderr line) over a generic "Connection closed" from the SDK when the
+      // process died during connect. Remote transports have no exit reason.
+      const exitReason = transport instanceof TauriTransport ? transport.exitReason : null;
+      const error = exitReason ?? (err instanceof Error ? err.message : String(err));
       this.servers.set(config.id, { kind: "failed", data: { config, error } });
-      // Close the transport so its Tauri listeners are unsubscribed (idempotent
-      // if the fail-fast exit path already closed it) — otherwise a retry of the
-      // same id would stack a second set of listeners.
+      // If a Streamable HTTP session was established before a later step (e.g.
+      // listTools) failed, end it server-side before closing — otherwise the
+      // session leaks. No-op/405 if no session exists yet.
+      if (transport instanceof StreamableHTTPClientTransport) {
+        try {
+          await transport.terminateSession();
+        } catch {
+          // ignore — server may not support session termination (405)
+        }
+      }
+      // Close the transport so any listeners are unsubscribed (idempotent if the
+      // fail-fast exit path already closed it) — otherwise a retry of the same
+      // id would stack duplicates.
       try {
         await transport?.close();
       } catch {
         // ignore
       }
-      try {
-        await invoke("stop_mcp_server", { handle: config.id });
-      } catch {
-        // ignore
+      // Only stdio spawned a child process to stop.
+      if (isStdio) {
+        try {
+          await invoke("stop_mcp_server", { handle: config.id });
+        } catch {
+          // ignore
+        }
       }
     }
   }
 
   private async resolveSecrets(config: McpServerConfig): Promise<McpServerConfig> {
-    if (!config.env) return config;
-    const resolved: Record<string, string> = {};
-    for (const [key, value] of Object.entries(config.env)) {
-      resolved[key] = await this.resolveSecretRefs(value);
+    if (!config.env && !config.headers) return config;
+    const next = { ...config };
+    // stdio servers carry secrets in `env`; remote (http/sse) servers carry them
+    // in `headers` (e.g. `Authorization: Bearer ${secret:token}`). Resolve both
+    // so a placeholder ref is never sent literally to a remote server.
+    if (config.env) {
+      const resolvedEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(config.env)) {
+        resolvedEnv[key] = await this.resolveSecretRefs(value);
+      }
+      next.env = resolvedEnv;
     }
-    return { ...config, env: resolved };
+    if (config.headers) {
+      const resolvedHeaders: Record<string, string> = {};
+      for (const [key, value] of Object.entries(config.headers)) {
+        resolvedHeaders[key] = await this.resolveSecretRefs(value);
+      }
+      next.headers = resolvedHeaders;
+    }
+    return next;
   }
 
   private async resolveSecretRefs(value: string): Promise<string> {

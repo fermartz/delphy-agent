@@ -220,6 +220,37 @@ describe("validateMcpConfig", () => {
     expect(errors.some((e) => e.field === "url")).toBe(true);
   });
 
+  it("accepts an https url for http/sse", () => {
+    const errors = validateMcpConfig(
+      { id: "test", name: "Test", transport: "http", url: "https://example.com/mcp" },
+      [],
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it("rejects a plain-http url for a non-loopback host", () => {
+    const errors = validateMcpConfig(
+      { id: "test", name: "Test", transport: "http", url: "http://example.com/mcp" },
+      [],
+    );
+    expect(errors.some((e) => e.field === "url" && e.message.includes("https"))).toBe(true);
+  });
+
+  it("allows http for loopback hosts (local dev servers)", () => {
+    for (const url of ["http://localhost:3000/mcp", "http://127.0.0.1:8080"]) {
+      const errors = validateMcpConfig({ id: "test", name: "Test", transport: "sse", url }, []);
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it("rejects a malformed url for http/sse", () => {
+    const errors = validateMcpConfig(
+      { id: "test", name: "Test", transport: "http", url: "not a url" },
+      [],
+    );
+    expect(errors.some((e) => e.field === "url")).toBe(true);
+  });
+
   it("rejects inline API keys in env", () => {
     const errors = validateMcpConfig(
       {

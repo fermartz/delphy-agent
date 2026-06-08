@@ -25,6 +25,50 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   },
 }));
 
+// Mock the Streamable HTTP transport + the remote-transport factory so the
+// http/sse branch is exercised without real network I/O. The manager checks
+// `transport instanceof StreamableHTTPClientTransport` to drive terminateSession,
+// so the factory returns an instance of this exact mocked class. Defined via
+// vi.hoisted so the class is initialized before the hoisted vi.mock factories
+// read it.
+const {
+  terminateSessionMock,
+  remoteCloseMock,
+  sseCloseMock,
+  createRemoteTransportMock,
+  MockStreamableHTTPClientTransport,
+  MockSSEClientTransport,
+} = vi.hoisted(() => {
+  const terminateSessionMock = vi.fn();
+  const remoteCloseMock = vi.fn();
+  const sseCloseMock = vi.fn();
+  const createRemoteTransportMock = vi.fn();
+  class MockStreamableHTTPClientTransport {
+    terminateSession = terminateSessionMock;
+    close = remoteCloseMock;
+  }
+  // The legacy SSE transport has no session to terminate — it must NOT be an
+  // instance of MockStreamableHTTPClientTransport so disconnect()/boot cleanup
+  // skip terminateSession for it.
+  class MockSSEClientTransport {
+    close = sseCloseMock;
+  }
+  return {
+    terminateSessionMock,
+    remoteCloseMock,
+    sseCloseMock,
+    createRemoteTransportMock,
+    MockStreamableHTTPClientTransport,
+    MockSSEClientTransport,
+  };
+});
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+  StreamableHTTPClientTransport: MockStreamableHTTPClientTransport,
+}));
+vi.mock("./transport-factory", () => ({
+  createRemoteTransport: createRemoteTransportMock,
+}));
+
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { _McpManagerForTests } from "./manager";
@@ -49,6 +93,14 @@ describe("McpManager", () => {
     callToolMock.mockReset();
     closeMock.mockReset();
     closeMock.mockResolvedValue(undefined);
+    terminateSessionMock.mockReset();
+    terminateSessionMock.mockResolvedValue(undefined);
+    remoteCloseMock.mockReset();
+    remoteCloseMock.mockResolvedValue(undefined);
+    sseCloseMock.mockReset();
+    sseCloseMock.mockResolvedValue(undefined);
+    createRemoteTransportMock.mockReset();
+    createRemoteTransportMock.mockReturnValue(new MockStreamableHTTPClientTransport());
     mockedInvoke.mockReset();
     mockedListen.mockReset();
     // listen returns a no-op unlisten; the transport's start() awaits it.
@@ -190,24 +242,174 @@ describe("McpManager", () => {
     expect(result.content[0].text).toContain("network failure");
   });
 
-  it("non-stdio config is set to failed with unsupported transport message", async () => {
-    const httpConfig: McpServerConfig = {
-      id: "http-server",
-      name: "HTTP Server",
-      enabled: true,
-      transport: "http",
-      url: "https://example.com",
-    };
+  const HTTP_CONFIG: McpServerConfig = {
+    id: "http-server",
+    name: "HTTP Server",
+    enabled: true,
+    transport: "http",
+    url: "https://example.com/mcp",
+  };
+
+  const SSE_CONFIG: McpServerConfig = {
+    id: "sse-server",
+    name: "SSE Server",
+    enabled: true,
+    transport: "sse",
+    url: "https://example.com/sse",
+  };
+
+  it("http config connects via the remote transport (no spawn) and exposes tools", async () => {
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockResolvedValue({
+      tools: [{ name: "search", description: "Search.", inputSchema: { type: "object" } }],
+    });
+
     const mgr = new _McpManagerForTests();
-    await mgr.init([httpConfig]);
+    await mgr.init([HTTP_CONFIG]);
+
+    expect(createRemoteTransportMock).toHaveBeenCalledTimes(1);
+    // No child process is spawned for a remote transport.
+    expect(mockedInvoke).not.toHaveBeenCalledWith("spawn_mcp_server", expect.anything());
+
+    const status = mgr.getStatus();
+    expect(status[0]).toMatchObject({ id: "http-server", kind: "connected", toolCount: 1 });
+    expect(mgr.getAllTools().map((t) => t.namespacedName)).toEqual(["http-server__search"]);
+  });
+
+  it("http connect failure becomes a failed row and never calls stop_mcp_server", async () => {
+    connectMock.mockRejectedValue(new Error("connection refused"));
+
+    const mgr = new _McpManagerForTests();
+    await expect(mgr.init([HTTP_CONFIG])).resolves.toBeUndefined();
 
     const status = mgr.getStatus();
     expect(status[0]).toMatchObject({
       id: "http-server",
       kind: "failed",
-      error: 'Transport "http" is not yet supported',
+      error: "connection refused",
     });
+    // Remote transport is closed on failure, but there is no child to stop.
+    expect(remoteCloseMock).toHaveBeenCalledTimes(1);
+    expect(mockedInvoke).not.toHaveBeenCalledWith("stop_mcp_server", expect.anything());
+  });
+
+  it("removeServer for http terminates the session, closes the client, and skips stop_mcp_server", async () => {
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockResolvedValue({
+      tools: [{ name: "search", inputSchema: { type: "object" } }],
+    });
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([HTTP_CONFIG]);
+    expect(mgr.getStatus()).toHaveLength(1);
+
+    await mgr.removeServer("http-server");
+    expect(mgr.getStatus()).toHaveLength(0);
+    // Streamable HTTP ends the server-side session (DELETE) before close.
+    expect(terminateSessionMock).toHaveBeenCalledTimes(1);
+    expect(closeMock).toHaveBeenCalledTimes(1);
+    // No child process exists for a remote server.
+    expect(mockedInvoke).not.toHaveBeenCalledWith("stop_mcp_server", expect.anything());
+  });
+
+  it("http listTools failure after a successful connect still terminates the session", async () => {
+    // connect succeeds (a server session may exist) but listTools fails — the
+    // cleanup must terminateSession() before close so the session can't leak.
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockRejectedValue(new Error("listTools boom"));
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([HTTP_CONFIG]);
+
+    expect(mgr.getStatus()[0]).toMatchObject({ id: "http-server", kind: "failed" });
+    expect(terminateSessionMock).toHaveBeenCalledTimes(1);
+    expect(remoteCloseMock).toHaveBeenCalledTimes(1);
+    expect(mockedInvoke).not.toHaveBeenCalledWith("stop_mcp_server", expect.anything());
+  });
+
+  it("a non-https, non-loopback url is rejected at boot before building a transport", async () => {
+    const mgr = new _McpManagerForTests();
+    await mgr.init([{ ...HTTP_CONFIG, url: "http://example.com/mcp" }]);
+
+    expect(mgr.getStatus()[0]).toMatchObject({ id: "http-server", kind: "failed" });
+    expect(mgr.getStatus()[0].error).toContain("https");
+    // The transport is never constructed for a rejected URL.
+    expect(createRemoteTransportMock).not.toHaveBeenCalled();
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal secret reference
+  it("resolves ${secret:key} in headers before building the remote transport", async () => {
+    mockedInvoke.mockImplementation((async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_secret" && args?.key === "api_token") return "resolved-token";
+      return undefined;
+    }) as typeof invoke);
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockResolvedValue({ tools: [] });
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([
+      {
+        ...HTTP_CONFIG,
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: literal secret reference
+        headers: { Authorization: "Bearer ${secret:api_token}" },
+      },
+    ]);
+
+    expect(createRemoteTransportMock).toHaveBeenCalledTimes(1);
+    const passedConfig = createRemoteTransportMock.mock.calls[0][0] as McpServerConfig;
+    expect(passedConfig.headers?.Authorization).toBe("Bearer resolved-token");
+  });
+
+  it("sse config connects via the remote transport (no spawn) and exposes tools", async () => {
+    createRemoteTransportMock.mockReturnValue(new MockSSEClientTransport());
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockResolvedValue({
+      tools: [{ name: "ping", inputSchema: { type: "object" } }],
+    });
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([SSE_CONFIG]);
+
+    expect(createRemoteTransportMock).toHaveBeenCalledTimes(1);
     expect(mockedInvoke).not.toHaveBeenCalledWith("spawn_mcp_server", expect.anything());
+    expect(mgr.getStatus()[0]).toMatchObject({ id: "sse-server", kind: "connected", toolCount: 1 });
+  });
+
+  it("removeServer for sse closes the client without terminateSession or stop_mcp_server", async () => {
+    createRemoteTransportMock.mockReturnValue(new MockSSEClientTransport());
+    connectMock.mockResolvedValue(undefined);
+    listToolsMock.mockResolvedValue({ tools: [] });
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([SSE_CONFIG]);
+    await mgr.removeServer("sse-server");
+
+    expect(mgr.getStatus()).toHaveLength(0);
+    // SDK client is closed, but SSE has no server-side session to terminate and
+    // no child process to stop.
+    expect(closeMock).toHaveBeenCalledTimes(1);
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+    expect(mockedInvoke).not.toHaveBeenCalledWith("stop_mcp_server", expect.anything());
+  });
+
+  it("sse boot failure closes the transport without terminateSession or stop_mcp_server", async () => {
+    createRemoteTransportMock.mockReturnValue(new MockSSEClientTransport());
+    connectMock.mockRejectedValue(new Error("sse connect boom"));
+
+    const mgr = new _McpManagerForTests();
+    await mgr.init([SSE_CONFIG]);
+
+    expect(mgr.getStatus()[0]).toMatchObject({
+      id: "sse-server",
+      kind: "failed",
+      error: "sse connect boom",
+    });
+    // The SSE transport is closed on failure, but it has no session to terminate
+    // and no child process to stop.
+    expect(sseCloseMock).toHaveBeenCalledTimes(1);
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+    expect(mockedInvoke).not.toHaveBeenCalledWith("stop_mcp_server", expect.anything());
   });
 
   it("addServer boots a new server and exposes it in status", async () => {
