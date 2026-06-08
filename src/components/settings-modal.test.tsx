@@ -43,6 +43,8 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
   const onAuxiliaryProviderModelChange = vi.fn();
   const onThemeChange = vi.fn();
   const onColorModeChange = vi.fn();
+  const onBackendChange = vi.fn();
+  const onCodexWorkingDirChange = vi.fn();
   render(
     <SettingsModal
       open
@@ -75,6 +77,10 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
       onMcpRemove={vi.fn()}
       onMcpRestart={vi.fn()}
       onMcpToggle={vi.fn()}
+      currentBackend="anthropic-api"
+      onBackendChange={onBackendChange}
+      codexWorkingDir={null}
+      onCodexWorkingDirChange={onCodexWorkingDirChange}
       {...overrides}
     />,
   );
@@ -84,6 +90,8 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
     onAuxiliaryProviderModelChange,
     onThemeChange,
     onColorModeChange,
+    onBackendChange,
+    onCodexWorkingDirChange,
   };
 }
 
@@ -94,13 +102,57 @@ async function openTab(user: ReturnType<typeof userEvent.setup>, name: RegExp | 
 }
 
 describe("SettingsModal", () => {
-  it("renders the dialog with title and the four tabs", () => {
+  it("renders the dialog with title and the tabs (Backend + direct-API tabs)", () => {
     renderModal();
     expect(screen.getByRole("dialog", { name: /settings/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /backend/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /providers/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /models/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /plugins/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /appearance/i })).toBeInTheDocument();
+  });
+
+  describe("Backend tab", () => {
+    it("switching to Codex fires onBackendChange", async () => {
+      const user = userEvent.setup();
+      const { onBackendChange } = renderModal();
+      await openTab(user, /backend/i);
+      await user.click(screen.getByRole("radio", { name: /Codex/i }));
+      expect(onBackendChange).toHaveBeenCalledWith("codex");
+    });
+
+    it("when Codex is active: hides Providers/Models tabs, shows the disclosure + working-dir field", () => {
+      renderModal({ currentBackend: "codex" });
+      // Backend tab is the default when Codex is active.
+      expect(screen.queryByRole("tab", { name: /providers/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: /models/i })).not.toBeInTheDocument();
+      expect(screen.getByText(/Codex can read your files/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Working directory/i)).toBeInTheDocument();
+    });
+
+    it("Set is disabled until an absolute path is entered, then fires onCodexWorkingDirChange", async () => {
+      const user = userEvent.setup();
+      const { onCodexWorkingDirChange } = renderModal({ currentBackend: "codex" });
+      const setBtn = screen.getByRole("button", { name: "Set" });
+      expect(setBtn).toBeDisabled();
+      await user.type(screen.getByLabelText(/Working directory/i), "relative/path");
+      expect(setBtn).toBeDisabled(); // not absolute
+      await user.clear(screen.getByLabelText(/Working directory/i));
+      await user.type(screen.getByLabelText(/Working directory/i), "/Users/me/proj");
+      expect(setBtn).toBeEnabled();
+      await user.click(setBtn);
+      expect(onCodexWorkingDirChange).toHaveBeenCalledWith("/Users/me/proj");
+    });
+
+    it("a broad directory (home) requires the confirm checkbox before Set is enabled", async () => {
+      const user = userEvent.setup();
+      renderModal({ currentBackend: "codex" });
+      await user.type(screen.getByLabelText(/Working directory/i), "/Users/me");
+      const setBtn = screen.getByRole("button", { name: "Set" });
+      expect(setBtn).toBeDisabled();
+      await user.click(screen.getByRole("checkbox"));
+      expect(setBtn).toBeEnabled();
+    });
   });
 
   it("Appearance tab shows the theme trigger and color-mode radios", async () => {

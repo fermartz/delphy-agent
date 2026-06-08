@@ -13,11 +13,41 @@ interface BootBannerProps {
   providerLabel: string;
 }
 
+const CODEX_ERROR_KINDS = new Set<BootErrorKind>([
+  "codex-missing",
+  "codex-no-workdir",
+  "codex-failed",
+]);
+
+function codexBannerCopy(kind: BootErrorKind, message: string): { title: string; hint: string } {
+  switch (kind) {
+    case "codex-missing":
+      return {
+        title: "Codex CLI not found",
+        hint: "Install the Codex CLI and make sure it's on your PATH, then try again.",
+      };
+    case "codex-no-workdir":
+      return {
+        title: "Codex needs a working directory",
+        hint: "Open Settings → Backend and choose the project directory Codex should work in.",
+      };
+    default:
+      return {
+        title: "Codex failed to start",
+        hint: `${message} — if you're not signed in, run \`codex login\` in a terminal, then try again.`,
+      };
+  }
+}
+
 /**
- * Boot-time API-key entry / failure banner. Extracted verbatim from App.tsx.
- * Branches on `errorKind`: "unknown" → retry banner; "secure-storage-unavailable"
- * → Linux session-only-key copy + "Use for session"; else → inline key entry +
- * "Open Providers".
+ * Boot-time setup / failure banner. Branches on `errorKind`:
+ *   - Codex kinds (`codex-*`) → a NON-secret setup banner (install / set
+ *     directory / `codex login`) with Open-Settings + Try-again — never a key
+ *     input.
+ *   - "unknown" → retry banner.
+ *   - "secure-storage-unavailable" → Linux session-only-key copy + "Use for
+ *     session".
+ *   - else (missing-key) → inline API-key entry + "Open Providers".
  */
 export function BootBanner({
   errorKind,
@@ -30,6 +60,26 @@ export function BootBanner({
   saving,
   providerLabel,
 }: BootBannerProps) {
+  if (CODEX_ERROR_KINDS.has(errorKind)) {
+    const { title, hint } = codexBannerCopy(errorKind, errorMessage);
+    return (
+      <div className="border-b border-border bg-muted px-4 py-3 text-sm text-foreground">
+        <div className="font-medium">{title}</div>
+        <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+        <div className="mt-2 flex gap-2">
+          <Button type="button" size="sm" onClick={onOpenProviders}>
+            Open Settings
+          </Button>
+          {errorKind !== "codex-no-workdir" ? (
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+              Try again
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   if (errorKind === "unknown") {
     return (
       <div className="border-b border-border bg-muted px-4 py-3 text-sm text-foreground">

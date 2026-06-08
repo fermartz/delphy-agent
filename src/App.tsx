@@ -324,12 +324,39 @@ function App() {
     [settings.color_mode],
   );
 
+  // Switching the backend re-routes boot.ts (direct-API vs Codex), so it
+  // restarts the session.
+  const handleBackendChange = useCallback(
+    async (newBackend: string) => {
+      if (newBackend === settings.default_backend) return;
+      const updated = await saveSettings({ default_backend: newBackend });
+      setSettings(updated);
+      triggerReboot();
+    },
+    [settings.default_backend, triggerReboot],
+  );
+
+  // Setting the Codex working directory re-boots so Codex starts (or restarts)
+  // against the chosen directory.
+  const handleCodexWorkingDirChange = useCallback(
+    async (dir: string) => {
+      const value = dir.trim() || null;
+      if (value === settings.codex_working_dir) return;
+      const updated = await saveSettings({ codex_working_dir: value });
+      setSettings(updated);
+      triggerReboot();
+    },
+    [settings.codex_working_dir, triggerReboot],
+  );
+
   const backendLabel =
     backend === "anthropic-api"
       ? "Anthropic (Claude)"
-      : backend === "echo-fallback"
-        ? "echo (fallback)"
-        : "…";
+      : backend === "codex"
+        ? "Codex"
+        : backend === "echo-fallback"
+          ? "echo (fallback)"
+          : "…";
   const hasPendingApproval = items.some((it) => it.kind === "approval" && it.verdict === undefined);
   const inputDisabled =
     streaming ||
@@ -340,12 +367,19 @@ function App() {
 
   return (
     <main className="flex h-screen bg-background text-foreground">
-      <SessionSidebar
-        sessions={sessionList}
-        activeSessionId={activeSessionId}
-        onSelect={switchToSession}
-        onNew={startFreshSession}
-      />
+      {/* The session sidebar reflects persisted direct-API sessions; Codex
+          sessions are ephemeral (BACKLOG #7 Slice A). Key off the SELECTED
+          backend, not the active result, so a Codex setup-error fallback to
+          echo (codex-no-workdir/missing/failed) doesn't re-expose direct-API
+          session history/actions while boot still routes through Codex. */}
+      {settings.default_backend !== "codex" ? (
+        <SessionSidebar
+          sessions={sessionList}
+          activeSessionId={activeSessionId}
+          onSelect={switchToSession}
+          onNew={startFreshSession}
+        />
+      ) : null}
       <div className="flex min-w-0 flex-1 flex-col">
         <AppHeader
           themes={themes}
@@ -381,7 +415,9 @@ function App() {
 
         <StatusBar
           brand="delphy-agent"
-          model={settings.main_model ?? activeProfile.defaultModel}
+          model={
+            backend === "codex" ? "Codex" : (settings.main_model ?? activeProfile.defaultModel)
+          }
           activity={activityLabel}
           commandHints={COMMAND_HINTS}
           tokens={sessionTokens}
@@ -437,6 +473,10 @@ function App() {
           onMcpRemove={handleMcpRemove}
           onMcpRestart={handleMcpRestart}
           onMcpToggle={handleMcpToggle}
+          currentBackend={settings.default_backend}
+          onBackendChange={handleBackendChange}
+          codexWorkingDir={settings.codex_working_dir}
+          onCodexWorkingDirChange={handleCodexWorkingDirChange}
         />
 
         <Toast message={toast} />

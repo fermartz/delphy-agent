@@ -59,6 +59,42 @@ describe("BootBanner", () => {
     });
   });
 
+  describe("codex setup errors (non-secret banner — never the key form)", () => {
+    it("codex-missing: install guidance + Open Settings + Try again, no key input", async () => {
+      const user = userEvent.setup();
+      const onRetry = vi.fn();
+      const onOpenProviders = vi.fn();
+      render(
+        <BootBanner
+          {...baseProps}
+          errorKind="codex-missing"
+          onRetry={onRetry}
+          onOpenProviders={onOpenProviders}
+        />,
+      );
+      expect(screen.getByText("Codex CLI not found")).toBeInTheDocument();
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      expect(document.querySelector('input[type="password"]')).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Open Settings" }));
+      expect(onOpenProviders).toHaveBeenCalledOnce();
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+      expect(onRetry).toHaveBeenCalledOnce();
+    });
+
+    it("codex-no-workdir: prompts for a directory, Open Settings only (no Try again)", () => {
+      render(<BootBanner {...baseProps} errorKind="codex-no-workdir" />);
+      expect(screen.getByText("Codex needs a working directory")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    });
+
+    it("codex-failed: surfaces the message + codex login hint", () => {
+      render(<BootBanner {...baseProps} errorKind="codex-failed" errorMessage="handshake died" />);
+      expect(screen.getByText("Codex failed to start")).toBeInTheDocument();
+      expect(screen.getByText(/codex login/)).toBeInTheDocument();
+    });
+  });
+
   describe("secure-storage-unavailable (Linux fallback)", () => {
     it("shows the Linux copy, a 'Use for session' button, and no Open Providers", () => {
       render(<BootBanner {...baseProps} errorKind="secure-storage-unavailable" keyInput="sk-1" />);

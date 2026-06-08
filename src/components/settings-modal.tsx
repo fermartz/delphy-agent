@@ -61,6 +61,10 @@ export interface SettingsModalProps {
   onMcpRemove: (id: string) => void;
   onMcpRestart: (id: string) => void;
   onMcpToggle: (id: string, enabled: boolean) => void;
+  currentBackend: string;
+  onBackendChange: (backend: string) => void;
+  codexWorkingDir: string | null;
+  onCodexWorkingDirChange: (dir: string) => void;
 }
 
 const COLOR_MODES: readonly ColorMode[] = ["light", "dark", "system"];
@@ -97,7 +101,12 @@ function SettingsModalInner({
   onMcpRemove,
   onMcpRestart,
   onMcpToggle,
+  currentBackend,
+  onBackendChange,
+  codexWorkingDir,
+  onCodexWorkingDirChange,
 }: SettingsModalProps) {
+  const isCodex = currentBackend === "codex";
   const [mcpFormOpen, setMcpFormOpen] = useState(false);
   const [mcpEditId, setMcpEditId] = useState<string | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
@@ -161,13 +170,43 @@ function SettingsModalInner({
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="providers" className="w-full">
+        <Tabs defaultValue={isCodex ? "backend" : "providers"} className="w-full">
           <TabsList className="w-full">
-            <TabsTrigger value="providers">Providers</TabsTrigger>
-            <TabsTrigger value="models">Models</TabsTrigger>
+            <TabsTrigger value="backend">Backend</TabsTrigger>
+            {!isCodex ? <TabsTrigger value="providers">Providers</TabsTrigger> : null}
+            {!isCodex ? <TabsTrigger value="models">Models</TabsTrigger> : null}
             <TabsTrigger value="plugins">Plugins</TabsTrigger>
             <TabsTrigger value="appearance">Appearance</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="backend" className="mt-3 space-y-4">
+            <section className="space-y-2">
+              <div className="text-xs font-medium text-foreground">Backend</div>
+              <RadioGroup
+                value={isCodex ? "codex" : "anthropic-api"}
+                onValueChange={onBackendChange}
+                className="flex flex-col gap-2 text-xs text-foreground"
+              >
+                <label htmlFor="backend-direct" className="flex items-center gap-1.5">
+                  <RadioGroupItem id="backend-direct" value="anthropic-api" />
+                  Direct API (cloud providers — Anthropic, OpenAI, …)
+                </label>
+                <label htmlFor="backend-codex" className="flex items-center gap-1.5">
+                  <RadioGroupItem id="backend-codex" value="codex" />
+                  Codex (local agent CLI)
+                </label>
+              </RadioGroup>
+              <div className="text-xs text-muted-foreground">
+                Switching the backend restarts the session.
+              </div>
+            </section>
+            {isCodex ? (
+              <CodexBackendPanel
+                workingDir={codexWorkingDir}
+                onWorkingDirChange={onCodexWorkingDirChange}
+              />
+            ) : null}
+          </TabsContent>
 
           <TabsContent value="providers" className="mt-3">
             <ProvidersPanel
@@ -375,6 +414,87 @@ function SettingsModalInner({
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A "broad" directory (home or filesystem root) Codex shouldn't get blanket
+ *  read access to without an explicit confirm. */
+function isBroadDir(p: string): boolean {
+  const normalized = p.replace(/\/$/, "");
+  if (
+    normalized === "" ||
+    normalized === "/Users" ||
+    normalized === "/home" ||
+    normalized === "/root"
+  ) {
+    return true;
+  }
+  // The home directory itself (/Users/<name> or /home/<name>).
+  return /^\/(Users|home)\/[^/]+$/.test(normalized);
+}
+
+function CodexBackendPanel({
+  workingDir,
+  onWorkingDirChange,
+}: {
+  workingDir: string | null;
+  onWorkingDirChange: (dir: string) => void;
+}) {
+  const [dir, setDir] = useState(workingDir ?? "");
+  const [confirmedBroad, setConfirmedBroad] = useState(false);
+  const trimmed = dir.trim();
+  const isAbsolute = trimmed.startsWith("/");
+  const broad = isBroadDir(trimmed);
+  const error =
+    trimmed.length > 0 && !isAbsolute ? "Enter an absolute path (starting with /)." : null;
+  const valid = trimmed.length > 0 && isAbsolute && (!broad || confirmedBroad);
+  const unchanged = trimmed === (workingDir ?? "");
+
+  return (
+    <section className="space-y-2">
+      <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
+        <span className="font-medium">Codex can read your files.</span> It may autonomously read
+        files under the directory you choose and send relevant content to OpenAI. Pick a specific
+        project directory — not your home folder. Codex runs read-only in this slice.
+      </div>
+      <Label htmlFor="codex-cwd" className="text-xs font-medium">
+        Working directory
+      </Label>
+      <div className="flex gap-2">
+        <Input
+          id="codex-cwd"
+          value={dir}
+          onChange={(e) => setDir(e.currentTarget.value)}
+          placeholder="/Users/you/project"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+        <Button
+          type="button"
+          size="sm"
+          disabled={!valid || unchanged}
+          onClick={() => onWorkingDirChange(trimmed)}
+        >
+          Set
+        </Button>
+      </div>
+      {error ? <div className="text-xs text-destructive">{error}</div> : null}
+      {broad && isAbsolute ? (
+        <label className="flex items-start gap-2 text-xs text-destructive">
+          <input
+            type="checkbox"
+            checked={confirmedBroad}
+            onChange={(e) => setConfirmedBroad(e.currentTarget.checked)}
+            className="mt-0.5"
+          />
+          This is a broad directory (home or root). I understand Codex can read everything under it.
+        </label>
+      ) : null}
+      <div className="text-xs text-muted-foreground">
+        Codex authenticates via your <code>codex login</code> session; no key is stored here.
+      </div>
+    </section>
   );
 }
 

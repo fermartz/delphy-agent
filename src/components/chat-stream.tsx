@@ -32,7 +32,9 @@ export function ChatStream({
         <p className="text-sm text-muted-foreground">
           {backend === "anthropic-api"
             ? "Type a message to chat with Claude."
-            : "Type a message to see the echo adapter stream."}
+            : backend === "codex"
+              ? "Type a message to start a Codex session in your working directory."
+              : "Type a message to see the echo adapter stream."}
         </p>
       ) : (
         <ul className="space-y-3">
