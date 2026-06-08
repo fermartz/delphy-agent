@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/app-header";
 import { BootBanner } from "@/components/boot-banner";
 import { ChatStream } from "@/components/chat-stream";
@@ -10,15 +10,13 @@ import { SessionSidebar } from "@/components/session-sidebar";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
 import { Toast } from "@/components/toast";
+import { useMcpServers } from "@/hooks/use-mcp-servers";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { reduceChatItems } from "./core/chat/items-reducer";
 import { type ChatItem, projectMessagesToChatItems } from "./core/chat-projection";
 import { type CommandContext, dispatchInput } from "./core/commands";
 import { getSession, listSessions, type SessionListEntry } from "./core/db/sessions";
-import { mcpManager } from "./core/mcp/manager";
-import { loadMcpConfigs, saveMcpConfigs } from "./core/mcp/store";
-import type { McpServerConfig, McpServerStatus } from "./core/mcp/types";
 import { getProvider, listProviders } from "./core/providers";
 import { anthropicProfile } from "./core/providers/anthropic";
 import {
@@ -73,8 +71,19 @@ function App() {
   // selected_theme / color_mode haven't changed (e.g., the user edited the
   // currently-active theme's JSON in place).
   const [themesVersion, setThemesVersion] = useState(0);
-  const [mcpStatuses, setMcpStatuses] = useState<McpServerStatus[]>([]);
-  const [mcpConfigs, setMcpConfigs] = useState<McpServerConfig[]>([]);
+  const mcpToast = useCallback((message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 4000);
+  }, []);
+  const {
+    mcpStatuses,
+    mcpConfigs,
+    handleMcpAdd,
+    handleMcpEdit,
+    handleMcpRemove,
+    handleMcpRestart,
+    handleMcpToggle,
+  } = useMcpServers({ onToast: mcpToast });
   const [sessionList, setSessionList] = useState<SessionListEntry[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
@@ -266,39 +275,6 @@ function App() {
       sessionRef.current = null;
     };
   }, [rebootCounter]);
-
-  // Boot MCP servers in parallel with the chat session + themes loader.
-  // Per slice-A plan Parameter 15, failure is non-blocking: each per-server
-  // failure is captured as `kind: "failed"` in McpManager state and surfaces
-  // in the Settings modal; chat works regardless. Show "connecting…" rows
-  // immediately so users see progress while npx warms up on first run.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-once boot effect; reconcileMcpStatuses only closes over the stable setMcpStatuses setter and must not retrigger this effect.
-  useEffect(() => {
-    let active = true;
-    void loadMcpConfigs()
-      .then((configs) => {
-        if (!active) return;
-        setMcpConfigs(configs);
-        setMcpStatuses(
-          configs.map((c) => ({
-            id: c.id,
-            name: c.name,
-            kind: c.enabled ? ("connecting" as const) : ("disabled" as const),
-          })),
-        );
-        return mcpManager.init(configs);
-      })
-      .then(() => {
-        if (!active) return;
-        // Merge (not wholesale-replace) so a user add/edit that started during
-        // boot init — including a synthesized failed row the manager doesn't
-        // know about — isn't erased by the init-completion snapshot.
-        reconcileMcpStatuses(mcpManager.getStatus());
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   // Load themes on mount, inject the <style> rules, then subscribe to live
   // changes from the user-themes directory. Each watcher event re-loads,
@@ -656,123 +632,6 @@ function App() {
       ...prev,
       [providerId]: { status: "not-configured" },
     }));
-  }
-
-  function mcpToast(message: string) {
-    setToast(message);
-    setTimeout(() => setToast(null), 4000);
-  }
-
-  // Insert/replace an optimistic "connecting…" row so the user gets immediate
-  // feedback while a server spawns + connects (npx cold-start can take many
-  // seconds). Mirrors the boot-time placeholder pattern.
-  function setMcpConnecting(id: string, name: string) {
-    setMcpStatuses((prev) => {
-      const row = { id, name, kind: "connecting" as const };
-      return prev.some((s) => s.id === id)
-        ? prev.map((s) => (s.id === id ? row : s))
-        : [...prev, row];
-    });
-  }
-
-  // Merge the manager's statuses into the visible map WITHOUT dropping rows the
-  // manager hasn't recorded yet (other in-flight optimistic "connecting" rows).
-  // `force` pins one row — used to synthesize a failed row when a step before
-  // bootOne threw (e.g. persistence), so the server never silently vanishes.
-  function reconcileMcpStatuses(managed: McpServerStatus[], force?: McpServerStatus) {
-    const byId = new Map(managed.map((s) => [s.id, s]));
-    setMcpStatuses((prev) => {
-      const seen = new Set<string>();
-      const next = prev.map((s) => {
-        seen.add(s.id);
-        if (force && s.id === force.id) return force;
-        return byId.get(s.id) ?? s;
-      });
-      for (const s of managed) if (!seen.has(s.id)) next.push(s);
-      if (force && !seen.has(force.id)) next.push(force);
-      return next;
-    });
-  }
-
-  // Run a spawn-bearing MCP action with feedback. `bootOne` never throws on a
-  // connect failure — it resolves with kind:"failed" — so after the await we
-  // read getStatus() and toast the failed row's error. A pre-bootOne throw
-  // (e.g. persistence) means the manager has no entry for the server, so we
-  // synthesize a failed row instead of letting it vanish. Statuses are merged,
-  // never wholesale-replaced, so a concurrent action's optimistic row survives.
-  async function runMcpBoot(config: McpServerConfig, run: () => Promise<void>) {
-    setMcpConnecting(config.id, config.name);
-    let errMsg: string | null = null;
-    try {
-      await run();
-    } catch (err) {
-      errMsg = err instanceof Error ? err.message : String(err);
-    }
-    const managed = mcpManager.getStatus();
-    const known = managed.find((s) => s.id === config.id);
-    const force: McpServerStatus | undefined =
-      errMsg && !known
-        ? { id: config.id, name: config.name, kind: "failed", error: errMsg }
-        : undefined;
-    reconcileMcpStatuses(managed, force);
-    const finalRow = force ?? known;
-    if (finalRow?.kind === "failed") {
-      mcpToast(`MCP "${config.id}" failed — ${finalRow.error ?? errMsg ?? "could not connect"}`);
-    }
-  }
-
-  async function handleMcpAdd(config: McpServerConfig) {
-    const updated = [...mcpConfigs, config];
-    setMcpConfigs(updated);
-    await runMcpBoot(config, async () => {
-      await saveMcpConfigs(updated);
-      await mcpManager.addServer(config);
-    });
-  }
-
-  async function handleMcpEdit(config: McpServerConfig) {
-    const updated = mcpConfigs.map((c) => (c.id === config.id ? config : c));
-    setMcpConfigs(updated);
-    await runMcpBoot(config, async () => {
-      await saveMcpConfigs(updated);
-      await mcpManager.restartServer(config);
-    });
-  }
-
-  async function handleMcpRemove(id: string) {
-    const updated = mcpConfigs.filter((c) => c.id !== id);
-    setMcpConfigs(updated);
-    await saveMcpConfigs(updated);
-    await mcpManager.removeServer(id);
-    // Drop just this row; the config is gone so it won't render regardless, and
-    // we avoid clobbering any other action's in-flight optimistic row.
-    setMcpStatuses((prev) => prev.filter((s) => s.id !== id));
-  }
-
-  async function handleMcpRestart(id: string) {
-    const config = mcpConfigs.find((c) => c.id === id);
-    if (!config) return;
-    await runMcpBoot(config, () => mcpManager.restartServer(config));
-  }
-
-  async function handleMcpToggle(id: string, enabled: boolean) {
-    const updated = mcpConfigs.map((c) => (c.id === id ? { ...c, enabled } : c));
-    setMcpConfigs(updated);
-    const config = updated.find((c) => c.id === id);
-    if (!config) return;
-    if (enabled) {
-      // Enable routes through the same long-running spawn path as Add.
-      await runMcpBoot(config, async () => {
-        await saveMcpConfigs(updated);
-        await mcpManager.addServer(config);
-      });
-    } else {
-      // Disable: stop the server immediately (no spawn). The config stays with
-      // enabled:false, so the row renders as "disabled" once its status clears.
-      await saveMcpConfigs(updated);
-      await mcpManager.removeServer(id);
-      setMcpStatuses((prev) => prev.filter((s) => s.id !== id));
-    }
   }
 
   const backendLabel =
