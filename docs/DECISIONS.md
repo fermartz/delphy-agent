@@ -8,6 +8,42 @@ When a decision is later reversed, do not delete the entry — add a new dated e
 
 ---
 
+## 2026-06-08 — Product direction: Delphy Agent is an AI-native web app; plugins = MCP server + optional UI surface
+
+**Decision.** This entry records a strategic-direction conversation (2026-06-08) so we don't lose sight of it while building incrementally. It does not change shipped code; it sets the north star the next slices serve and resolves what "next" means.
+
+**1. What Delphy Agent is, sharpened.** Not a nicer frontend for someone else's agent, and not a chatbot with tools bolted on the side. It is an **AI-native desktop app for browsing and interacting with the web**. A normal app is human-native: the person drives — types URLs, clicks pages built for human eyes — with AI as a sidebar. Delphy Agent inverts the labor while keeping the human in the seat: **you express intent in plain language, the agent does the discovery and the reaching-out, and results return as rich native views** — entity cards, profiles, players, action prompts — not walls of text. The web is addressed through structure agents understand (registries, MCP capabilities, manifests), not scraped HTML. The contrast that defines the product: apps like ChatGPT desktop are "handicapped" — they can't add an MCP server, so they can't be open or AI-native on tools. Delphy Agent's edge is exactly that openness.
+
+**2. Two cost/capability pillars (both first-class).**
+- **Pillar A — bring your own model.** Plug in any provider's API key (Anthropic / OpenAI / Google / xAI / OpenRouter / Kimi / DeepSeek / Groq / Custom), pay per token. Shipped.
+- **Pillar B — bring your own subscription agent.** Use Codex (included in a ChatGPT plan) or Claude Code (included in a Claude plan) — a **flat fee, no API metering**. This re-justifies the agent-CLI backend (BACKLOG #7): its value is "use the agent you already pay for," *not* "re-skin someone else's agent." Codex therefore stays a parallel pillar, not the headline.
+
+**3. Plugins = MCP servers, generalized to optionally contribute UI.** A plugin can contribute three layers: (1) **tools** — what the agent can do (works today; the moment you add a radio MCP, "play chill radio from Spain" maps to its `play_station` tool); (2) **entry points** — a sidebar button, a suggested prompt, a quick action (different *doors* to the same plugin); (3) **rich renderers** — a player widget, a media grid, a card. The plugin contract becomes *an MCP server + an optional UI manifest*. That documented contract is the **open-source flywheel**: a stranger can ship a world-radio or media-concierge plugin and have it feel native — the same distribution logic as Delphy MCP, opened to everyone.
+
+**4. Delphy MCP ships default-on** (reinforces the 2026-05-27 dual-purpose decision). It is the discovery+identity layer that makes the web addressable by agents — it is *what makes the app AI-native at all*, not an opt-in plugin. Current gap to close: only `Fetch` is seeded as a default server today (BACKLOG #24).
+
+**5. The journey — slow and steady, each step small and reviewable.**
+- **Phase 0 — Delphy MCP default-on** (BACKLOG #24). Prerequisite; unblocks everything. *The literal next slice.*
+- **Phase 1 — rich rendering of discovery** (BACKLOG #25). `discover`/`search` results render as a native card grid, click → profile. Built as a **generic structured-view system from day one**, with Delphy as its first consumer — so a third-party plugin slots into the same renderer later. Mostly presentational; no new agent plumbing.
+- **Phase 2 — profile view + capability actions.** Capabilities render as risk-graded affordances; "ask-first / always-ask" become native approval cards (upgrade the existing approval flow's rendering). Now you *interact*, not just look.
+- **Phase 3 — broaden the verbs** via a small curated MCP set, each with per-tool enable/disable (BACKLOG #18) so capability grows without context bloat; then publish the plugin-UI manifest spec (BACKLOG #26).
+- **Phase 4 — dedicated canvas (optional, later).** A persistent viewport where the current view lives separate from the transcript; chat becomes the address-bar/co-pilot. Bigger lift — only after 0–2 prove the pattern.
+- Recommended order: **0 → 1 → 2 in the chat stream first**, then decide on the canvas.
+
+**6. Two design forks flagged, not yet decided.**
+- **Rendering trust model (a VISION #1 call).** Either (a) plugins return **structured descriptors** ("a player with this stream URL"; "a grid of these items") that *our* trusted components draw — secure, token-light, **recommended start**; or (b) plugins ship **sandboxed webviews** — flexible but a much larger attack surface. Begin with (a); it already covers radio/grids/playlists/profiles.
+- **Per-plugin auth.** Netflix/Spotify-style plugins mean OAuth login *inside* a plugin. MCP already has auth patterns (Delphy itself does token exchange), but every login is a security surface; the **keychain stays our trusted domain — plugins do not touch it**.
+
+**7. Honest capability boundary (so plugins don't over-promise).** Radio is playable: a station is a stream URL → an `<audio>` element. DRM-walled media (Netflix video, Spotify playback) is **concierge + remote-control**, not in-app playback — "here are your historical titles" (metadata grid) → "open in Netflix" deep-link. Spotify playback needs their SDK + Premium. **Some plugins play, some point.**
+
+**8. Security becomes visible UI.** Delphy's declared capability risk grading (safe / ask-first / always-ask) maps directly onto render affordances and approval cards — VISION #1 made *visible* to the user, not hidden in a guardrail.
+
+**Why.** The maintainer clarified the product's intent: not to replace Codex for its own sake, but to be a flexible, MCP-extensible, any-provider AI desktop app that does what closed apps can't. The unifying frame is **AI-native**: Delphy (the registry) is AI-native, so Delphy Agent should be too. Capturing it now keeps the incremental slices pointed at one picture.
+
+**Alternatives considered.** Deepen Codex as the headline feature (rejected — that's "a nicer frontend for someone else's agent," explicitly not the goal; Codex earns its place via the subscription-cost pillar instead). Sandboxed plugin webviews as the first rendering model (deferred — security surface; the constrained-descriptor vocabulary covers near-term cases). Fusing the AI-native-web journey with the Codex backend now (rejected — the journey rides the **direct-API** path; Codex joins later via Slice C, sharing the MCP spine). Jumping straight to a dedicated canvas surface (deferred to Phase 4 — prove the pattern in the chat stream first, cheaper and auditable).
+
+**Lives in.** Direction only — no code yet. VISION.md updated ("What it is" gains the AI-native-web framing; principle #5 notes the subscription-cost pillar; new principle #11 "AI-native experience, plugins can contribute UI"; "What it is NOT" gains "not a re-skin of another agent's UI"). Backlog slices added: **#24 Delphy MCP default-on**, **#25 generic structured-render system**, **#26 plugin-UI manifest spec**. Reinforces 2026-05-27 "dual-purpose"; clarifies (does not change) the 2026-06-08 Codex Slice A entry — Codex's *role* is reframed as the subscription-agent pillar.
+
 ## 2026-06-08 — Codex backend adapter, Slice A: read-only turn loop over `codex mcp-server` (BACKLOG #7)
 
 **Decision.** Shipped Slice A of the Codex backend adapter: Codex is a sibling `BackendAdapter` (`id: "codex"`, `kind: "agent-cli"`) driven over **`codex mcp-server`** through the existing Rust MCP bridge + `TauriTransport`. A recon against codex 0.137.0 (2026-06-08) confirmed the design: `codex mcp-server` exposes a **`codex`** tool (start a session — `prompt`/`cwd`/`model`/`sandbox`/`approval-policy`; returns `{threadId, content}`) and a **`codex-reply`** tool (continue with `threadId`), and **streams** a live feed of custom **`codex/event`** notifications during a `tools/call`. `CodexSession.sendMessage` calls `codex` (turn 1, captures `threadId`) then `codex-reply`, taps the `codex/event` stream via a new `TauriTransport.subscribe()` tee, and translates events → our `AgentEvent` union. Codex is selected via a Settings **Backend** toggle (`settings.default_backend`); the boot path routes `"codex"` to an **ephemeral** branch — no SQLite persistence, no resume, bypassing `resolveSessionContext`.
