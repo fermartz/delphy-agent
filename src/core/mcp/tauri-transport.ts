@@ -41,6 +41,8 @@ export class TauriTransport implements Transport {
   private lastStderr: string | null = null;
   /** Set when the child process exits before/while connecting. */
   private exitReasonText: string | null = null;
+  /** Extra read-only observers of every incoming frame (the Codex "tee"). */
+  private readonly observers = new Set<(message: JSONRPCMessage) => void>();
 
   onmessage?: (message: JSONRPCMessage) => void;
   onerror?: (error: Error) => void;
@@ -68,6 +70,15 @@ export class TauriTransport implements Transport {
         );
         return;
       }
+      // Dispatch to tee observers (Codex's codex/event stream) before the SDK
+      // Client's onmessage. Observers are read-only and must not break dispatch.
+      for (const observer of this.observers) {
+        try {
+          observer(msg);
+        } catch (obsErr) {
+          console.warn(`[mcp:${this.handle}] tee observer error`, obsErr);
+        }
+      }
       this.onmessage?.(msg);
     });
     this.stderrOff = await listen<LinePayload>(`mcp:${this.handle}:stderr`, (event) => {
@@ -94,6 +105,19 @@ export class TauriTransport implements Transport {
   /** Reason the child exited, if it did (the last stderr line when available). */
   get exitReason(): string | null {
     return this.exitReasonText;
+  }
+
+  /**
+   * Register an additional read-only observer ("tee") that receives every parsed
+   * incoming JSON-RPC frame, dispatched alongside `onmessage`. The Codex adapter
+   * uses it to watch custom `codex/event` notifications while the MCP SDK Client
+   * owns request/response correlation via `onmessage`. Returns an unsubscribe fn.
+   */
+  subscribe(listener: (message: JSONRPCMessage) => void): () => void {
+    this.observers.add(listener);
+    return () => {
+      this.observers.delete(listener);
+    };
   }
 
   /** Unsubscribe all Tauri listeners. Idempotent. */

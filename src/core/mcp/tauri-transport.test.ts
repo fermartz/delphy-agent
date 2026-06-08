@@ -60,6 +60,31 @@ describe("TauriTransport", () => {
     });
   });
 
+  it("subscribe() tees every frame to observers alongside onmessage; unsubscribe stops it", async () => {
+    const t = new TauriTransport("test-server");
+    const onmessage = vi.fn();
+    const observer = vi.fn();
+    t.onmessage = onmessage;
+    const unsub = t.subscribe(observer);
+
+    await t.start();
+    const stdoutHandler = handlers.get("mcp:test-server:stdout");
+
+    // A custom codex/event notification reaches BOTH the observer and onmessage.
+    const frame =
+      '{"jsonrpc":"2.0","method":"codex/event","params":{"msg":{"type":"task_started"}}}';
+    stdoutHandler({ payload: { line: frame } });
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(observer.mock.calls[0][0]).toMatchObject({ method: "codex/event" });
+    expect(onmessage).toHaveBeenCalledTimes(1);
+
+    // After unsubscribe the observer is silent but onmessage still fires.
+    unsub();
+    stdoutHandler({ payload: { line: '{"jsonrpc":"2.0","id":1,"result":{}}' } });
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(onmessage).toHaveBeenCalledTimes(2);
+  });
+
   it("send serializes the message to JSON and invokes send_mcp_stdin", async () => {
     const t = new TauriTransport("test-server");
     await t.start();
