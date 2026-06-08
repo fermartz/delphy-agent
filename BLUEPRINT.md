@@ -79,10 +79,12 @@
 
   - [ ] **State** (MEMORY.md "Current State") — update date, phase, capabilities, last shipped. Re-read after editing to 
   verify it matches reality.
-  - [ ] **Map** (`<project>-map.md`) — if any files were created, moved, deleted, or renamed: update routing/file index. 
-  Grep for stale references to old paths.
+  - [ ] **Map** (`<project>-map.md`) — three sub-steps, all required:
+    1. **File index:** every file created / moved / deleted / renamed is added to (or removed from) the file-tree index. List the actual files — updating only a headline/intro line is not enough (a slice once "updated the map" while leaving 6 new component files unlisted).
+    2. **Re-read the narrative, don't just grep.** For any subsystem whose state, logic, or ownership MOVED, open every map section that describes it — the file-tree entry AND any dedicated `### Section` prose — and re-read each in full against the new reality. Grepping for moved paths catches renamed symbols but NOT stale prose: a sentence like "the boot effect runs in App" has no symbol to grep for and will survive a grep-only sweep. (This is exactly how the `### Chat UI` section stayed stale through a slice that "updated the map.")
+    3. Update the map's **"Last structural change"** header line.
   - [ ] **Tasks** (`<project>-tasks.md`) — move from ACTIVE → DONE with a summary + reviewer verdict. Remove from BACKLOG. 
-  Audit backlog for stale references.
+  Audit backlog for stale references. **Archive cadence:** when the DONE section exceeds ~15 entries (or the file ~60 KB), move all but the last ~2 slices of DONE into `<project>-tasks-archive.md` so the always-referenced task file stays lean and current.
   - [ ] **Decisions** (`decisions.md`) — if an architectural choice was made, log it with date + rationale.
   - [ ] **Plan** (`.hermes/plans/<plan>.md`) — mark checkboxes `[x]`.
   - [ ] **Constants/enums** — if enums, kind lists, or URL patterns changed: grep the map for stale values.
