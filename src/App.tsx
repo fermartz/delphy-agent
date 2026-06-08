@@ -9,8 +9,10 @@ import { SessionSidebar } from "@/components/session-sidebar";
 import { SettingsModal } from "@/components/settings-modal";
 import { StatusBar } from "@/components/status-bar";
 import { Toast } from "@/components/toast";
+import { useChatScroll } from "@/hooks/use-chat-scroll";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { useProviders } from "@/hooks/use-providers";
+import { useThemes } from "@/hooks/use-themes";
 import type { BootErrorKind } from "./core/adapters/direct-api";
 import { type ActiveBackend, startActiveBackend } from "./core/boot";
 import { reduceChatItems } from "./core/chat/items-reducer";
@@ -25,11 +27,6 @@ import { DEFAULT_SETTINGS } from "./core/settings/defaults";
 import { saveSettings } from "./core/settings/settings";
 import type { ColorMode, Settings } from "./core/settings/types";
 import type { Session } from "./core/types";
-import { applyTheme } from "./themes/apply";
-import { injectThemeStyles } from "./themes/inject";
-import { loadAllThemes } from "./themes/loader";
-import type { Theme } from "./themes/types";
-import { subscribeToThemeChanges } from "./themes/watcher";
 
 let itemCounter = 0;
 function nextItemId(): string {
@@ -50,13 +47,10 @@ function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [themes, setThemes] = useState<Theme[]>([]);
-  const [themesLoaded, setThemesLoaded] = useState(false);
-  // Bumped by the watcher each time it reloads themes from disk, so the
-  // apply effect re-runs and re-asserts data-theme + .dark even when the
-  // selected_theme / color_mode haven't changed (e.g., the user edited the
-  // currently-active theme's JSON in place).
-  const [themesVersion, setThemesVersion] = useState(0);
+  const { themes } = useThemes({
+    selectedThemeId: settings.selected_theme,
+    colorMode: settings.color_mode,
+  });
   const mcpToast = useCallback((message: string) => {
     setToast(message);
     setTimeout(() => setToast(null), 4000);
@@ -113,8 +107,7 @@ function App() {
 
   const providerProfiles = listProviders();
   const sessionRef = useRef<Session | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stickyBottomRef = useRef(true);
+  const { scrollRef, onScroll: handleScroll } = useChatScroll(items);
 
   function triggerReboot() {
     setItems([]);
@@ -269,69 +262,6 @@ function App() {
       sessionRef.current = null;
     };
   }, [rebootCounter]);
-
-  // Load themes on mount, inject the <style> rules, then subscribe to live
-  // changes from the user-themes directory. Each watcher event re-loads,
-  // re-injects, and re-applies the current theme.
-  useEffect(() => {
-    let active = true;
-    let unlisten: (() => void) | null = null;
-
-    (async () => {
-      const loaded = await loadAllThemes();
-      if (!active) return;
-      injectThemeStyles(loaded);
-      setThemes(loaded);
-      setThemesLoaded(true);
-
-      try {
-        unlisten = await subscribeToThemeChanges(async () => {
-          const updated = await loadAllThemes();
-          if (!active) return;
-          injectThemeStyles(updated);
-          setThemes(updated);
-          setThemesVersion((v) => v + 1);
-        });
-      } catch (err) {
-        // Watcher unavailable (non-Tauri environment, permission denied, etc.) —
-        // themes still work, just no live reload.
-        console.warn("themes: subscribeToThemeChanges failed", err);
-      }
-    })();
-
-    return () => {
-      active = false;
-      if (unlisten) unlisten();
-    };
-  }, []);
-
-  // Apply the selected theme + color mode whenever either changes (or after
-  // themes finish loading on boot, or after the watcher reloads themes from
-  // disk). themesVersion is a deliberate effect-trigger — bumping it on a
-  // watcher reload re-runs applyTheme even when selected_theme + color_mode
-  // are unchanged. Returns a cleanup for the "system" mode's matchMedia
-  // listener.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: themesVersion is an effect-trigger (its value isn't read inside the effect, but bumping it must re-assert data-theme + .dark)
-  useEffect(() => {
-    if (!themesLoaded) return;
-    const cleanup = applyTheme(settings.selected_theme, settings.color_mode);
-    return cleanup;
-  }, [themesLoaded, themesVersion, settings.selected_theme, settings.color_mode]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: items is an effect-trigger — its array identity changes on every text delta via reduceChatItems, which is exactly when auto-scroll should re-run.
-  useEffect(() => {
-    if (!stickyBottomRef.current) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [items]);
-
-  function handleScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickyBottomRef.current = distFromBottom < 32;
-  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
