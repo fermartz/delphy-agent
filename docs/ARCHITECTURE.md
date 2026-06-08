@@ -48,7 +48,7 @@ Delphy Agent runs as three kinds of processes:
 | State | **Zustand** | Lightweight, fits chat/session shape; avoid Redux unless we need its devtools/middleware |
 | Direct-API LLM access | **Vercel AI SDK v5 (`ai` + `@ai-sdk/anthropic` + `@ai-sdk/openai` + `@ai-sdk/google`)** | Unified streaming, tool calls, Responses API support |
 | Claude Code | **`@anthropic-ai/claude-agent-sdk`** | TS, async-generator API, runtime model/MCP swap, `canUseTool` permission callback |
-| Codex | **Spawn `codex exec --json`** | Subprocess + JSONL parsing; richer than the Codex SDK as of May 2026 |
+| Codex | **Drive `codex mcp-server`** over stdio MCP (reuses the Rust MCP bridge) | Supersedes the original `codex exec --json` plan — see `docs/DECISIONS.md` 2026-05-26 + 2026-06-08; Slice A shipped 2026-06-08 |
 | MCP client | **`@modelcontextprotocol/sdk`** (TS) | Used by the direct-API path; Claude Code and Codex consume MCP natively |
 | Validation | **Zod v3** | Tool schemas, theme JSON, MCP config, settings shape |
 | Persistent storage | **`tauri-plugin-sql` (SQLite)** | Sessions, messages, MCP configs |
@@ -159,12 +159,10 @@ type AgentEvent =
 - Calls `q.setModel()` / `q.setMcpServers()` when settings change mid-session
 - `interrupt()` → `q.interrupt()`
 
-**`codex.ts`** — wraps a Rust-spawned `codex exec --json` subprocess:
-- Asks Rust to spawn the process via a Tauri command; receives a process handle ID
-- Subscribes to a Tauri event channel that delivers JSONL lines from stdout
-- Parses each line and emits a normalized `AgentEvent`
-- Maps Codex item types (`agent_message`, `reasoning`, `command_execution`, `file_change`, `mcp_tool_call`, `web_search`, `plan_update`) to our event types
-- `interrupt()` → asks Rust to send SIGTERM
+**Codex adapter (`src/core/codex/`)** — **SUPERSEDED SPEC** (this section originally described `codex exec --json` + JSONL parsing; that is replaced by `codex mcp-server` per `docs/DECISIONS.md` 2026-05-26 + 2026-06-08, Slice A shipped 2026-06-08). The adapter drives **`codex mcp-server`** through the existing Rust MCP bridge + `TauriTransport` (Codex is, at the wire level, another stdio MCP child — no new Rust):
+- `connect.ts` spawns `codex mcp-server` and completes the MCP handshake, verifying the `codex` + `codex-reply` tools.
+- `session.ts` (`CodexSession implements Session`) calls the `codex` tool (turn 1, captures `threadId`) then `codex-reply`; it taps the `codex/event` notification stream via `TauriTransport.subscribe()` and translates events → `AgentEvent` (`events.ts`).
+- `adapter.ts` (`codexAdapter`, `kind: "agent-cli"`) + an ephemeral `boot.ts` branch (no persistence/resume). Slice A is read-only (`sandbox: read-only`, `approval-policy: never`); approvals + workspace-write are Slice B, bidirectional tools (feed Codex its own MCP config) Slice C.
 
 **`direct-api.ts`** — wraps Vercel AI SDK v6:
 - Resolves a `ProviderProfile` from `src/core/providers/` (shipped: `anthropic`, `openai`, `google`, `xai`, plus first-class OpenAI-compatible `openrouter`/`kimi`/`deepseek`/`groq`, and the generic `openai-compatible` for the long tail) for both the main and auxiliary tier. The auxiliary default resolves `defaultAuxiliaryModel ?? defaultModel` of the auxiliary profile (no hardcoded model). Each profile carries a `pricing` table + a `discoveryFingerprint` for the 5-minute model-discovery cache (`providers/discovery-cache.ts`).
@@ -219,7 +217,7 @@ interface McpServerConfig {
 | Backend | Mechanism |
 |---------|-----------|
 | **Claude Code** | Pass `mcpServers` option to `query()` from the Agent SDK |
-| **Codex** | Write configs to a temp JSON file, pass via `codex exec --mcp-config <file>` |
+| **Codex** | Codex manages its own external MCP servers (`codex mcp` / `-c mcp_servers`); the user's servers are fed to Codex via its config (Slice C) — not a Delphy-hosted server. See `docs/DECISIONS.md` 2026-06-08. |
 | **Direct API** | MCP TS client connects in the webview. For stdio servers, Rust spawns the process and proxies stdin/stdout over Tauri events (the "MCP stdio bridge") |
 
 ### MCP stdio bridge (Rust)
