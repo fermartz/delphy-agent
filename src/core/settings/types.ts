@@ -18,4 +18,7 @@ export interface Settings {
   auxiliary_model: string | null;
   // Base URL for the Custom OpenAI-compatible profile. Empty/null = unset.
   openai_compatible_base_url: string | null;
+  // Working directory for the Codex backend (agent-cli). Null = unset; the
+  // Codex backend won't start without it. Validation/UI land in CP4.
+  codex_working_dir: string | null;
 }

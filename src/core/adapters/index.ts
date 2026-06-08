@@ -1,3 +1,4 @@
+import { codexAdapter } from "../codex/adapter";
 import type { BackendAdapter } from "../types";
 import { directApiAdapter } from "./direct-api";
 import { echoAdapter } from "./echo";
@@ -5,6 +6,7 @@ import { echoAdapter } from "./echo";
 const ADAPTERS: Record<string, BackendAdapter> = {
   echo: echoAdapter,
   "anthropic-api": directApiAdapter,
+  codex: codexAdapter,
 };
 
 export function getAdapter(id: string): BackendAdapter | undefined {

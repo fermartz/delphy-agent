@@ -63,7 +63,14 @@ function estimateMessageTokens(messages: ModelMessage[]): number {
   return total;
 }
 
-export type BootErrorKind = "missing-key" | "secure-storage-unavailable" | "unknown";
+export type BootErrorKind =
+  | "missing-key"
+  | "secure-storage-unavailable"
+  | "unknown"
+  // Codex backend (agent-cli) boot failures (BACKLOG #7).
+  | "codex-missing"
+  | "codex-no-workdir"
+  | "codex-failed";
 
 export class BootError extends Error {
   kind: BootErrorKind;

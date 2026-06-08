@@ -138,6 +138,15 @@ describe("settings module", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it("round-trips codex_working_dir through save/load (BACKLOG #7)", async () => {
+    await saveSettings({ codex_working_dir: "/Users/me/project" });
+    const settings = await loadSettings();
+    expect(settings.codex_working_dir).toBe("/Users/me/project");
+    // default is null when unset
+    resetMocks();
+    expect((await loadSettings()).codex_working_dir).toBeNull();
+  });
+
   it("returns defaults when the underlying store fails to load (corrupted file path)", async () => {
     loadShouldThrow = new Error("corrupted store");
     resetStoreForTests();

@@ -1,6 +1,8 @@
 import type { ModelMessage } from "ai";
 import { BootError, type BootErrorKind, directApiAdapter } from "./adapters/direct-api";
 import { echoAdapter } from "./adapters/echo";
+import { codexAdapter } from "./codex/adapter";
+import { CodexConnectError } from "./codex/connect";
 import { loadMemory } from "./db/memory";
 import { getProvider } from "./providers";
 import { createFreshSession, loadSessionContext, resolveSessionContext } from "./session-manager";
@@ -16,7 +18,7 @@ import type { Session } from "./types";
  * this as a discriminated string lets the UI branch on "real backend vs
  * fallback" without caring which provider is behind direct-API.
  */
-export type ActiveBackend = "anthropic-api" | "echo-fallback";
+export type ActiveBackend = "anthropic-api" | "codex" | "echo-fallback";
 
 export interface BootResult {
   session: Session;
@@ -46,6 +48,12 @@ export async function startActiveBackend(opts: StartBackendOptions = {}): Promis
     console.warn("[boot] migrateProviderBootstrap failed", err);
   }
   const settings = await loadSettings();
+
+  // Agent-CLI backend (Codex) is ephemeral and bypasses the direct-API session
+  // resolution / persistence path entirely (BACKLOG #7 Slice A).
+  if (settings.default_backend === "codex") {
+    return startCodexBackend(settings);
+  }
 
   let sessionId: string | null = null;
   let initialMessages: ModelMessage[] = [];
@@ -145,4 +153,47 @@ export async function startActiveBackend(opts: StartBackendOptions = {}): Promis
       error: errorPayload,
     };
   }
+}
+
+/**
+ * Ephemeral Codex backend: connect to `codex mcp-server` and construct a
+ * CodexSession with the configured working directory. No SQLite persistence, no
+ * resume, no provider/model resolution. On failure (no cwd / binary missing /
+ * handshake), fall back to echo and surface a Codex boot error.
+ */
+async function startCodexBackend(settings: Settings): Promise<BootResult> {
+  const base = {
+    settings,
+    initialMessages: [] as ModelMessage[],
+    sessionId: null,
+    resumed: false,
+    activeProviderId: null,
+  };
+  const cwd = settings.codex_working_dir;
+  if (!cwd || cwd.trim().length === 0) {
+    return codexFallback(
+      base,
+      "codex-no-workdir",
+      "Set a working directory for Codex in Settings.",
+    );
+  }
+  try {
+    const session = await codexAdapter.start({ cwd });
+    return { ...base, session, backend: "codex" };
+  } catch (err) {
+    const kind: BootErrorKind =
+      err instanceof CodexConnectError && err.kind === "not-installed"
+        ? "codex-missing"
+        : "codex-failed";
+    return codexFallback(base, kind, err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function codexFallback(
+  base: Omit<BootResult, "session" | "backend" | "error">,
+  kind: BootErrorKind,
+  message: string,
+): Promise<BootResult> {
+  const session = await echoAdapter.start({});
+  return { ...base, session, backend: "echo-fallback", error: { kind, message } };
 }

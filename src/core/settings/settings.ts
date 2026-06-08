@@ -84,6 +84,9 @@ export async function loadSettings(): Promise<Settings> {
   const baseUrl = await readField(store, "openai_compatible_base_url", isNullableString);
   if (baseUrl.found) settings.openai_compatible_base_url = baseUrl.value;
 
+  const codexCwd = await readField(store, "codex_working_dir", isNullableString);
+  if (codexCwd.found) settings.codex_working_dir = codexCwd.value;
+
   return settings;
 }
 

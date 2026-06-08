@@ -21,6 +21,8 @@ export interface SessionOptions {
   initialMessages?: unknown[];
   initialMemory?: string;
   persister?: MessagePersister;
+  /** Working directory for agent-cli backends (Codex). */
+  cwd?: string;
 }
 
 export interface CompactionMetrics {

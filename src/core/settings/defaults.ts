@@ -10,4 +10,5 @@ export const DEFAULT_SETTINGS: Settings = {
   auxiliary_provider: null,
   auxiliary_model: null,
   openai_compatible_base_url: null,
+  codex_working_dir: null,
 };
