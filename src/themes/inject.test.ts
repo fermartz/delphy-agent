@@ -49,6 +49,45 @@ describe("buildThemeStylesCss", () => {
     expect(darkBlock).not.toContain("--font-sans");
     expect(darkBlock).not.toContain("--radius");
   });
+
+  it("allows legitimate color functions and font stacks through the sanitizer", () => {
+    const theme = makeTheme("alpha");
+    theme.light.primary = "oklch(0.62 0.19 260)";
+    theme.tokens = { "font-sans": '"Inter Variable", system-ui, sans-serif' };
+    const css = buildThemeStylesCss([theme]);
+    expect(css).toContain("--primary: oklch(0.62 0.19 260);");
+    expect(css).toContain('--font-sans: "Inter Variable", system-ui, sans-serif;');
+  });
+
+  it("drops tokens whose value tries to break out of the declaration or fetch remote CSS", () => {
+    const theme = makeTheme("alpha");
+    // Rule breakout + tracking-pixel fetch smuggled through a token value.
+    theme.light.background = "#fff; } body { background: url(https://evil/p.png)";
+    theme.dark.foreground = "red;color:blue";
+    // @import and expression() are also blocked.
+    theme.tokens = { radius: "0.5rem", "font-sans": "@import 'https://evil/x.css'" };
+    const css = buildThemeStylesCss([theme]);
+    expect(css).not.toContain("evil");
+    expect(css).not.toContain("url(");
+    expect(css).not.toContain("@import");
+    expect(css).not.toContain("} body {");
+    // The safe token in the same theme still renders.
+    expect(css).toContain("--radius: 0.5rem;");
+  });
+
+  it("drops tokens with an unsafe name (prevents selector/property breakout)", () => {
+    const theme = makeTheme("alpha");
+    (theme.light as Record<string, string>)["evil} body {display:none"] = "red";
+    const css = buildThemeStylesCss([theme]);
+    expect(css).not.toContain("display:none");
+    expect(css).not.toContain("} body {");
+  });
+
+  it("skips a theme whose id is not a safe identifier", () => {
+    const theme = makeTheme("alpha");
+    theme.id = 'x"] { color: red } [data-theme="y';
+    expect(buildThemeStylesCss([theme])).toBe("\n\n");
+  });
 });
 
 describe("injectThemeStyles", () => {
