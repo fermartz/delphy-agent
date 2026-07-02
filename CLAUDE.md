@@ -41,7 +41,7 @@ Delphy Agent is an open, desktop-first **agent hub** built with Tauri v2 + React
 - No per-tool enable/disable or progressive tool disclosure — every connected MCP tool's full schema loads every turn (**BACKLOG #18/#19**; token-frugality)
 - No OAuth-authed remote MCP servers — Streamable HTTP + legacy SSE shipped with static header/bearer auth (**BACKLOG #9.A**, 2026-06-08); OAuth is **BACKLOG #9.B**. No WebSocket transport. (Codex backend still doesn't consume the user's MCP servers — **#7 Slice C**.)
 - No MCP catalog/picker (**#11**), skills system (**#10**), or MCP-secrets manager UI (**#13**)
-- `replaceMessages` still uses an unsafe cross-call SQLite transaction (**BACKLOG #15** — latent; `replaceMcpConfigs` already fixed)
+- ~~`replaceMessages` unsafe cross-call SQLite transaction~~ — **FIXED 2026-07-02 (BACKLOG #15).** Now atomic via a Rust-side `replace_session_messages` command (one sqlx transaction; `src-tauri/src/db_tx.rs`). Brought the first Rust tests too.
 - No DNS-rebinding / redirect-pinning on egress — the SSRF guard is host-literal; `maxRedirections:0` on image loads is interim. Native resolve-and-pin proxy + tighter capability scope + deprecated 6to4/IPv4-compatible IPv6 forms are a tracked follow-up (2026-07-02 audit).
 - No Zustand; no signing, notarization, or auto-updater (CI shipped 2026-07-02 — `.github/workflows/ci.yml`)
 
