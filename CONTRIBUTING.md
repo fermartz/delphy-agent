@@ -6,14 +6,14 @@ Contributions are welcome. This document is the entry point.
 
 Before opening a PR for anything non-trivial:
 
-- [docs/VISION.md](docs/VISION.md) — what Delphy Agent is, what it is NOT, and the ten principles. The first three (security-first, token-frugal, speed) are non-negotiable quality bars.
+- [docs/VISION.md](docs/VISION.md) — what Delphy Agent is, what it is NOT, and the eleven principles. The first three (security-first, token-frugal, speed) are non-negotiable quality bars.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — process model, stack, adapter pattern, MCP plugin shape, storage plan.
 - [BLUEPRINT.md](BLUEPRINT.md) — the project's plan → build → review workflow (internal authoring process; see "How to propose a change" below for how this maps to external PRs).
 - [docs/DECISIONS.md](docs/DECISIONS.md) — architectural decisions log, newest first. If a PR contradicts a logged decision, it needs a new decision entry justifying the supersession.
 
 ## Setup
 
-Same as the [README quick-start](README.md#quick-start). Node 20+, pnpm, Rust toolchain.
+Same as the [README quick-start](README.md#quick-start). Node 24, pnpm, Rust toolchain.
 
 ```bash
 pnpm install
