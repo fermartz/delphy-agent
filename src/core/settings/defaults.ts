@@ -11,4 +11,5 @@ export const DEFAULT_SETTINGS: Settings = {
   auxiliary_model: null,
   openai_compatible_base_url: null,
   codex_working_dir: null,
+  trusted_image_hosts: [],
 };

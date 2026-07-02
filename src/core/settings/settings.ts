@@ -30,6 +30,10 @@ function isColorMode(value: unknown): value is ColorMode {
   return isString(value) && (VALID_COLOR_MODES as readonly string[]).includes(value);
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
 async function readField<T>(
   store: Store,
   key: keyof Settings,
@@ -86,6 +90,9 @@ export async function loadSettings(): Promise<Settings> {
 
   const codexCwd = await readField(store, "codex_working_dir", isNullableString);
   if (codexCwd.found) settings.codex_working_dir = codexCwd.value;
+
+  const trustedImages = await readField(store, "trusted_image_hosts", isStringArray);
+  if (trustedImages.found) settings.trusted_image_hosts = trustedImages.value;
 
   return settings;
 }

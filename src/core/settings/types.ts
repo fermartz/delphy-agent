@@ -21,4 +21,8 @@ export interface Settings {
   // Working directory for the Codex backend (agent-cli). Null = unset; the
   // Codex backend won't start without it. Validation/UI land in CP4.
   codex_working_dir: string | null;
+  // Hosts the user has chosen to auto-load remote images from in rendered
+  // markdown. Empty by default: remote images are blocked until the user loads
+  // them (per-image) or trusts the host. Stored normalized (lowercase host).
+  trusted_image_hosts: string[];
 }

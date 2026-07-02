@@ -1,8 +1,17 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
+import { MarkdownImage } from "./markdown-image";
 
 const COMPONENTS: Components = {
+  // Remote images are NOT auto-fetched — load-on-consent / per-host trust,
+  // through the proxied fetch + strict SSRF guard. See MarkdownImage.
+  img: ({ src, alt }) => (
+    <MarkdownImage
+      src={typeof src === "string" ? src : undefined}
+      alt={typeof alt === "string" ? alt : undefined}
+    />
+  ),
   h1: ({ children, ...props }) => (
     <h1 className="text-lg font-semibold text-primary mt-2" {...props}>
       {children}

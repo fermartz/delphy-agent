@@ -16,6 +16,7 @@ import { useSession } from "@/hooks/use-session";
 import { useThemes } from "@/hooks/use-themes";
 import { nextItemId } from "./core/chat/item-id";
 import { type CommandContext, dispatchInput } from "./core/commands";
+import { seedTrustedImageHosts } from "./core/net/trusted-image-hosts";
 import { getProvider, listProviders } from "./core/providers";
 import { anthropicProfile } from "./core/providers/anthropic";
 import { resolveProviderApiKey } from "./core/providers/resolve-key";
@@ -43,7 +44,10 @@ function App() {
     setTimeout(() => setToast(null), 4000);
   }, []);
   const clearKeyInput = useCallback(() => setKeyInput(""), []);
-  const onSettingsLoaded = useCallback((loaded: Settings) => setSettings(loaded), []);
+  const onSettingsLoaded = useCallback((loaded: Settings) => {
+    setSettings(loaded);
+    seedTrustedImageHosts(loaded.trusted_image_hosts);
+  }, []);
 
   const { themes } = useThemes({
     selectedThemeId: settings.selected_theme,
