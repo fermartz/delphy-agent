@@ -34,3 +34,33 @@ fn format_keyring_error(err: KeyringError) -> String {
         e => format!("KEYRING_ERROR: {e}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_no_entry_to_a_stable_code() {
+        assert_eq!(format_keyring_error(KeyringError::NoEntry), "NO_ENTRY");
+    }
+
+    #[test]
+    fn maps_no_storage_access_to_the_linux_fallback_code() {
+        // Load-bearing prefix: the boot path (direct-api.ts BootError classifier,
+        // `message.startsWith("SECURE_STORAGE_UNAVAILABLE:")`) keys the Linux
+        // "session-only key" fallback UX off it. (resolve-key.ts separately
+        // catches ALL get_secret errors and falls through to runtime storage.)
+        let err = KeyringError::NoStorageAccess(Box::new(std::io::Error::other(
+            "secret service is not available",
+        )));
+        let msg = format_keyring_error(err);
+        assert!(msg.starts_with("SECURE_STORAGE_UNAVAILABLE:"), "got: {msg}");
+        assert!(msg.contains("secret service is not available"));
+    }
+
+    #[test]
+    fn maps_other_variants_to_a_generic_code() {
+        let msg = format_keyring_error(KeyringError::TooLong("some_key".to_string(), 10));
+        assert!(msg.starts_with("KEYRING_ERROR:"), "got: {msg}");
+    }
+}

@@ -199,10 +199,7 @@ pub async fn send_mcp_stdin(
     };
 
     let mut stdin_guard = stdin_arc.lock().await;
-    let mut payload = line;
-    if !payload.ends_with('\n') {
-        payload.push('\n');
-    }
+    let payload = frame_stdin_line(line);
     stdin_guard
         .write_all(payload.as_bytes())
         .await
@@ -345,4 +342,66 @@ fn spawn_line_reader<R>(
 #[derive(serde::Serialize, Clone)]
 struct LinePayload {
     line: String,
+}
+
+/// Ensure a JSON-RPC line ends with exactly one implicit newline. The MCP stdio
+/// transport is newline-delimited (one JSON message per line); this appends the
+/// terminator iff it's missing. Idempotent — a line already ending in '\n' is
+/// returned unchanged (it does not collapse or add a second newline).
+fn frame_stdin_line(mut line: String) -> String {
+    if !line.ends_with('\n') {
+        line.push('\n');
+    }
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_a_line_that_lacks_a_newline() {
+        assert_eq!(frame_stdin_line("hello".to_string()), "hello\n");
+    }
+
+    #[test]
+    fn framing_is_idempotent_when_the_line_already_ends_in_newline() {
+        assert_eq!(frame_stdin_line("hello\n".to_string()), "hello\n");
+    }
+
+    #[test]
+    fn frames_an_empty_line() {
+        assert_eq!(frame_stdin_line(String::new()), "\n");
+    }
+
+    #[test]
+    fn deserializes_a_minimal_stdio_config_with_defaults() {
+        let c: McpServerConfig =
+            serde_json::from_str(r#"{"id":"s1","transport":"stdio","command":"npx"}"#).unwrap();
+        assert_eq!(c.id, "s1");
+        assert_eq!(c.transport, "stdio");
+        assert_eq!(c.command, "npx");
+        assert_eq!(c.name, ""); // #[serde(default)]
+        assert!(!c.enabled); // #[serde(default)]
+        assert!(c.args.is_empty()); // #[serde(default)]
+        assert!(c.env.is_empty()); // #[serde(default)]
+    }
+
+    #[test]
+    fn deserializes_a_full_config() {
+        let json = r#"{"id":"s1","name":"Fetch","enabled":true,"transport":"stdio","command":"npx","args":["-y","fetch"],"env":{"K":"v"}}"#;
+        let c: McpServerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.name, "Fetch");
+        assert!(c.enabled);
+        assert_eq!(c.args, vec!["-y".to_string(), "fetch".to_string()]);
+        assert_eq!(c.env.get("K"), Some(&"v".to_string()));
+    }
+
+    #[test]
+    fn rejects_a_config_missing_a_required_field() {
+        // "command" is required (no serde default).
+        let parsed: Result<McpServerConfig, _> =
+            serde_json::from_str(r#"{"id":"s1","transport":"stdio"}"#);
+        assert!(parsed.is_err());
+    }
 }
