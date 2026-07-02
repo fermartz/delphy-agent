@@ -41,12 +41,12 @@ Delphy Agent runs as three kinds of processes:
 | Layer | Tech | Notes |
 |-------|------|-------|
 | Shell | **Tauri v2** | Rust, native webview, ~10MB base bundle |
-| Frontend framework | **React 18 + TypeScript** | |
+| Frontend framework | **React 19 + TypeScript** | |
 | Build tool | **Vite** | Fast dev server, ESM, matches Tauri's expectations |
 | Styling | **Tailwind v4** | Same as Astra Tauri build |
 | Component library | **shadcn/ui** | Same as Astra Tauri build. Installed 2026-05-27 (chrome port): `button`, `dialog`, `select`, `radio-group`, `dropdown-menu`. Paired with **`lucide-react`** for icons (added via shadcn's Nova preset). |
-| State | **Zustand** | Lightweight, fits chat/session shape; avoid Redux unless we need its devtools/middleware |
-| Direct-API LLM access | **Vercel AI SDK v5 (`ai` + `@ai-sdk/anthropic` + `@ai-sdk/openai` + `@ai-sdk/google`)** | Unified streaming, tool calls, Responses API support |
+| State | **React hooks** (`useState`/`useContext` + focused custom hooks in `src/hooks/`) | Current. Zustand was considered but not adopted — hooks fit the chat/session shape and avoid a dependency (see `CLAUDE.md` hard rule "no abstractions for hypothetical futures"). Revisit only if devtools/middleware become necessary. |
+| Direct-API LLM access | **Vercel AI SDK v6 (`ai` + `@ai-sdk/anthropic` + `@ai-sdk/openai` + `@ai-sdk/google` + `@ai-sdk/xai`)** | Unified streaming, tool calls; provider-polymorphic via per-provider `ProviderProfile` (8 providers). |
 | Claude Code | **`@anthropic-ai/claude-agent-sdk`** | TS, async-generator API, runtime model/MCP swap, `canUseTool` permission callback |
 | Codex | **Drive `codex mcp-server`** over stdio MCP (reuses the Rust MCP bridge) | Supersedes the original `codex exec --json` plan — see `docs/DECISIONS.md` 2026-05-26 + 2026-06-08; Slice A shipped 2026-06-08 |
 | MCP client | **`@modelcontextprotocol/sdk`** (TS) | Used by the direct-API path; Claude Code and Codex consume MCP natively |
@@ -446,7 +446,7 @@ Each one is a code path we are *not* writing this time. For carry-forward patter
 - **No xterm.js / embedded terminal.** We are not wrapping a terminal in a window.
 - **No node-pty.** No PTY in the app at all.
 - **No bundled Node runtime.** The agent core runs in the webview's V8.
-- **No custom OpenAI Responses API SSE handler.** Vercel AI SDK v5 covers it; Codex CLI owns its own backend.
+- **No custom OpenAI Responses API SSE handler.** Vercel AI SDK v6 covers it; Codex CLI owns its own backend.
 - **No custom OAuth flows for Codex or Claude.** The CLIs/SDKs own their auth.
 - **No journey-stage system prompt branching.** That was AstraNova-specific. System prompts here are per-backend defaults the user can edit, not domain-shaped.
 

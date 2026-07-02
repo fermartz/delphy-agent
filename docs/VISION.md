@@ -40,12 +40,12 @@ The first three are non-negotiable quality bars. The rest are architectural comm
 
 The full picture lives in `docs/ARCHITECTURE.md`. One-paragraph version:
 
-Tauri v2 (Rust shell) + React + TypeScript + Tailwind/shadcn in the webview. Each backend is an adapter exposing the same `sendMessage` / `streamEvents` / `listTools` shape: Claude Code via `@anthropic-ai/claude-agent-sdk`, Codex via spawned `codex exec --json` subprocess, direct APIs via Vercel AI SDK v5. MCP plugins are configured once and routed to whichever backend is active. Storage: SQLite (sessions, MCP configs, settings) via `tauri-plugin-sql`. No Node sidecar — agent core runs in the webview; Rust handles subprocess spawning, the MCP stdio bridge, and file system access.
+Tauri v2 (Rust shell) + React + TypeScript + Tailwind/shadcn in the webview. Each backend is an adapter exposing the same `sendMessage` / `streamEvents` / `listTools` shape: Claude Code via `@anthropic-ai/claude-agent-sdk`, Codex via spawned `codex exec --json` subprocess, direct APIs via Vercel AI SDK v6. MCP plugins are configured once and routed to whichever backend is active. Storage: SQLite (sessions, MCP configs, settings) via `tauri-plugin-sql`. No Node sidecar — agent core runs in the webview; Rust handles subprocess spawning, the MCP stdio bridge, and file system access.
 
 ## Lessons folded in from Astra
 
 - **Adapter pattern over per-provider branches.** Provider routing in Astra (`isCodexOAuth()` → `runCodexTurn()`, etc.) becomes a uniform adapter interface here.
-- **No custom SSE handlers.** Vercel AI SDK v5 covers the OpenAI Responses API natively; the Codex chatgpt.com backend is owned by `codex exec`, not us.
+- **No custom SSE handlers.** Vercel AI SDK v6 covers the OpenAI Responses API natively; the Codex chatgpt.com backend is owned by `codex exec`, not us.
 - **Atomic, scoped credential storage.** chmod 600 / 700, atomic writes, never in LLM context — same posture, scoped per backend.
 - **Session compaction at provider-aware thresholds.** The 85%-of-window rule earned its keep; bring it forward.
 - **Explicit consent before consequential actions.** Approval flows are surfaced in the UI, not implicit.
