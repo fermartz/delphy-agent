@@ -30,6 +30,11 @@ notify = "8.2.0"
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "rt", "macros"] }
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-http = "2.5.9"
+# Pinned to 0.8.x so cargo unifies with tauri-plugin-sql's sqlx (0.8.6): the
+# `Pool<Sqlite>` types must be the SAME compiled crate for
+# `replace_session_messages` to reuse the plugin's pool. If the plugin moves to
+# sqlx 0.9, bump this in lockstep.
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,3 +1,4 @@
+mod db_tx;
 mod mcp_bridge;
 mod secrets;
 mod themes;
@@ -43,6 +44,7 @@ pub fn run() {
             mcp_bridge::spawn_mcp_server,
             mcp_bridge::send_mcp_stdin,
             mcp_bridge::stop_mcp_server,
+            db_tx::replace_session_messages,
         ])
         .setup(|app| {
             if let Err(e) = themes::setup_user_themes_watcher(app) {

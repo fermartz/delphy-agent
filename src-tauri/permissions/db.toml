@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-replace-session-messages"
+description = "Allows the webview to atomically replace a session's message log (used after context compaction)."
+commands.allow = ["replace_session_messages"]

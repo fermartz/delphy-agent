@@ -1,5 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { ModelMessage } from "ai";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb, type MockDb } from "./db-mock";
 import { setDbForTests } from "./init";
 import { countMcpConfigs, listMcpConfigsFromDb, replaceMcpConfigs, seedMcpConfigs } from "./mcp";
@@ -21,12 +22,19 @@ import {
   updateSessionTitle,
 } from "./sessions";
 
+// replaceMessages runs its atomic rewrite in Rust via invoke() (real
+// transaction semantics are covered by the Rust test in src-tauri/src/db_tx.rs);
+// the TS side only serializes rows + wires the command.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const mockedInvoke = vi.mocked(invoke);
+
 describe("db", () => {
   let mock: MockDb;
 
   beforeEach(() => {
     mock = createTestDb();
     setDbForTests(mock);
+    mockedInvoke.mockReset();
   });
 
   afterEach(() => {
@@ -235,41 +243,42 @@ describe("db", () => {
       expect(await loadMessages("s1")).toEqual([]);
     });
 
-    it("replaceMessages clears old + inserts new", async () => {
-      await appendMessage("s1", 0, { role: "user", content: "old1" });
-      await appendMessage("s1", 1, { role: "user", content: "old2" });
+    it("replaceMessages invokes the atomic Rust command with serialized, seq-ordered rows", async () => {
       const compacted: ModelMessage[] = [
         { role: "assistant", content: [{ type: "text", text: "[delphy:summary] summary" }] },
         { role: "user", content: "new" },
       ];
+
       await replaceMessages("s1", compacted);
-      const loaded = await loadMessages("s1");
-      expect(loaded).toHaveLength(2);
-      expect(loaded[0].role).toBe("assistant");
-      expect(loaded[1].content).toBe("new");
+
+      expect(mockedInvoke).toHaveBeenCalledTimes(1);
+      const [command, args] = mockedInvoke.mock.calls[0];
+      expect(command).toBe("replace_session_messages");
+      const typed = args as { sessionId: string; messages: Array<Record<string, unknown>> };
+      expect(typed.sessionId).toBe("s1");
+      expect(typed.messages).toHaveLength(2);
+      expect(typed.messages[0]).toMatchObject({
+        seq: 0,
+        role: "assistant",
+        content: JSON.stringify([{ type: "text", text: "[delphy:summary] summary" }]),
+      });
+      expect(typed.messages[1]).toMatchObject({
+        seq: 1,
+        role: "user",
+        content: JSON.stringify("new"),
+      });
+      // Each row carries a generated id + created_at for the pure Rust writer.
+      for (const row of typed.messages) {
+        expect(typeof row.id).toBe("string");
+        expect(typeof row.created_at).toBe("number");
+      }
     });
 
-    it("replaceMessages rolls back on mid-INSERT failure (transactional)", async () => {
-      await appendMessage("s1", 0, { role: "user", content: "old1" });
-      await appendMessage("s1", 1, { role: "user", content: "old2" });
-
-      // The replace path DELETEs then INSERTs. After the DELETE, the first
-      // INSERT in the replace will be insertSeen=1 inside the transaction.
-      // We want the SECOND INSERT inside the transaction to fail so the
-      // first (already-applied) insert + the DELETE both roll back.
-      mock.failOnNthInsert(2);
-
-      const compacted: ModelMessage[] = [
-        { role: "assistant", content: [{ type: "text", text: "new1" }] },
-        { role: "user", content: "new2" },
-      ];
-
-      await expect(replaceMessages("s1", compacted)).rejects.toThrow(/synthetic failure/);
-
-      const loaded = await loadMessages("s1");
-      expect(loaded).toHaveLength(2);
-      expect(loaded[0].content).toBe("old1");
-      expect(loaded[1].content).toBe("old2");
+    it("replaceMessages surfaces a Rust command failure to the caller", async () => {
+      mockedInvoke.mockRejectedValueOnce(new Error("database sqlite:delphy.db is not loaded"));
+      await expect(replaceMessages("s1", [{ role: "user", content: "x" }])).rejects.toThrow(
+        /not loaded/,
+      );
     });
   });
 

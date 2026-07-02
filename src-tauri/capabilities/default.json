@@ -19,6 +19,7 @@
     "allow-spawn-mcp-server",
     "allow-send-mcp-stdin",
     "allow-stop-mcp-server",
+    "allow-replace-session-messages",
     {
       "identifier": "http:default",
       "allow": [

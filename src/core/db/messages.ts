@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { ModelMessage } from "ai";
 import { getDb } from "./init";
 
@@ -61,26 +62,24 @@ export async function loadMessages(sessionId: string): Promise<ModelMessage[]> {
 }
 
 /**
- * Replace the entire message log for a session. Used after compaction.
- * Runs inside a single SQL transaction so a partial failure cannot leave
- * the session in a half-compacted state.
+ * Replace the entire message log for a session (used after compaction), as a
+ * single ATOMIC operation.
+ *
+ * This runs in Rust (`replace_session_messages` → `src-tauri/src/db_tx.rs`),
+ * inside one sqlx transaction on a single connection. A JS-side
+ * `BEGIN`/`COMMIT` is NOT a real transaction: `tauri-plugin-sql` runs each
+ * `execute()` on a pooled connection, so a mid-loop `INSERT` failure after the
+ * `DELETE` would wipe the session's history (BACKLOG #15). Ids and timestamps
+ * are generated here so the Rust command is a pure atomic writer.
  */
 export async function replaceMessages(sessionId: string, messages: ModelMessage[]): Promise<void> {
-  const db = await getDb();
-  await db.execute(`BEGIN`);
-  try {
-    await db.execute(`DELETE FROM messages WHERE session_id = ?`, [sessionId]);
-    for (let i = 0; i < messages.length; i++) {
-      const { role, content } = serializeMessage(messages[i]);
-      await db.execute(
-        `INSERT INTO messages (id, session_id, seq, role, content, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [nextMessageId(), sessionId, i, role, content, Date.now()],
-      );
-    }
-    await db.execute(`COMMIT`);
-  } catch (err) {
-    await db.execute(`ROLLBACK`);
-    throw err;
-  }
+  // Ensure the plugin's sqlite pool is loaded before the Rust command reaches
+  // for it (normal path; the command also errors clearly if it isn't).
+  await getDb();
+  const now = Date.now();
+  const rows = messages.map((message, i) => {
+    const { role, content } = serializeMessage(message);
+    return { id: nextMessageId(), seq: i, role, content, created_at: now };
+  });
+  await invoke("replace_session_messages", { sessionId, messages: rows });
 }
