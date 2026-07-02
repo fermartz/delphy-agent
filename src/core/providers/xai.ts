@@ -1,5 +1,6 @@
 import { createXai } from "@ai-sdk/xai";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { ProviderProfile } from "./types";
 
 const MODELS_ENDPOINT = "https://api.x.ai/v1/models";
@@ -20,12 +21,12 @@ export const xaiProfile: ProviderProfile = {
   secretKey: "xai_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel => {
-    const xai = createXai({ apiKey });
+    const xai = createXai({ apiKey, fetch: proxiedFetch });
     return xai(modelId);
   },
 
   fetchModels: async (apiKey: string): Promise<string[]> => {
-    const response = await fetch(MODELS_ENDPOINT, {
+    const response = await proxiedFetch(MODELS_ENDPOINT, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {

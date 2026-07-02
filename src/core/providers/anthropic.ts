@@ -1,5 +1,6 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { ProviderProfile } from "./types";
 
 const ANTHROPIC_BETA_HEADER = "prompt-caching-2024-07-31";
@@ -23,26 +24,27 @@ export const anthropicProfile: ProviderProfile = {
   secretKey: "anthropic_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel => {
-    const anthropic = createAnthropic({ apiKey });
+    const anthropic = createAnthropic({ apiKey, fetch: proxiedFetch });
     return anthropic(modelId);
   },
 
   headers: () => ({
     "anthropic-beta": ANTHROPIC_BETA_HEADER,
-    // Required by Anthropic's API to permit direct requests from a browser
-    // (Tauri webview presents as origin http://localhost:1420 in dev). Anthropic
-    // returns the appropriate CORS headers only when this is set. The "dangerous"
-    // naming is from Anthropic's own SDK — for a server-side app exposing the
-    // key in JS would be unsafe; for a desktop app where the user owns the
-    // process and the key lives in their keychain, opting in is correct.
+    // Still required even though egress is Rust-proxied: `@tauri-apps/plugin-http`
+    // ALWAYS injects an `Origin` header (tauri://localhost) and lists ORIGIN as a
+    // forbidden header we can't strip without the `unsafe-headers` feature. So
+    // Anthropic still sees a browser-like request and returns 401 unless we opt
+    // in here. Safe for a desktop app: the key lives in the OS keychain and the
+    // user owns the process. (Removing this broke Anthropic during CP1 smoke.)
     "anthropic-dangerous-direct-browser-access": "true",
   }),
 
   fetchModels: async (apiKey: string): Promise<string[]> => {
-    const response = await fetch(MODELS_ENDPOINT, {
+    const response = await proxiedFetch(MODELS_ENDPOINT, {
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": ANTHROPIC_VERSION,
+        // See headers() above — plugin-http injects Origin, so the opt-in stays.
         "anthropic-dangerous-direct-browser-access": "true",
       },
     });

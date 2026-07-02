@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { Settings } from "../settings/types";
 import type { ProviderProfile } from "./types";
 
@@ -29,7 +30,9 @@ export const openaiCompatibleProfile: ProviderProfile = {
         "openai-compatible: no base URL configured. Set Settings → Providers → Custom (OpenAI-compatible) → Base URL.",
       );
     }
-    const compat = createOpenAI({ apiKey, baseURL });
+    // NOTE: baseURL is user-controlled — it must pass the shared egress guard
+    // (validateProxiedEgressUrl, CP3) before use. Wired here once that lands.
+    const compat = createOpenAI({ apiKey, baseURL, fetch: proxiedFetch });
     return compat(modelId);
   },
 
@@ -39,7 +42,7 @@ export const openaiCompatibleProfile: ProviderProfile = {
       throw new Error("openai-compatible: no base URL configured");
     }
     const url = `${baseURL.replace(/\/+$/, "")}/models`;
-    const response = await fetch(url, {
+    const response = await proxiedFetch(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {

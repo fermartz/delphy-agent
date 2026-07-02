@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { ProviderProfile } from "./types";
 
 // Moonshot / Kimi — GLOBAL endpoint. The China endpoint (api.moonshot.cn)
@@ -16,10 +17,10 @@ export const kimiProfile: ProviderProfile = {
   secretKey: "kimi_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel =>
-    createOpenAI({ apiKey, baseURL: BASE_URL })(modelId),
+    createOpenAI({ apiKey, baseURL: BASE_URL, fetch: proxiedFetch })(modelId),
 
   fetchModels: async (apiKey: string): Promise<string[]> => {
-    const response = await fetch(`${BASE_URL}/models`, {
+    const response = await proxiedFetch(`${BASE_URL}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {

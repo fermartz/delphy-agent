@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { ProviderProfile } from "./types";
 
 // DeepSeek — base URL has no /v1 (both forms route the same). Verified
@@ -14,10 +15,10 @@ export const deepseekProfile: ProviderProfile = {
   secretKey: "deepseek_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel =>
-    createOpenAI({ apiKey, baseURL: BASE_URL })(modelId),
+    createOpenAI({ apiKey, baseURL: BASE_URL, fetch: proxiedFetch })(modelId),
 
   fetchModels: async (apiKey: string): Promise<string[]> => {
-    const response = await fetch(`${BASE_URL}/models`, {
+    const response = await proxiedFetch(`${BASE_URL}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {

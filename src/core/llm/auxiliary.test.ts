@@ -59,7 +59,10 @@ describe("AuxiliaryClient", () => {
     const callArgs = mockedGenerateText.mock.calls[0][0];
     expect(callArgs.system).toBe("you are a summarizer");
     expect(callArgs.prompt).toBe("user prompt");
+    // Proxied egress still needs the browser-access opt-in: plugin-http injects
+    // an Origin header, so Anthropic treats the request as browser-originated.
     expect(callArgs.headers).toMatchObject({
+      "anthropic-beta": "prompt-caching-2024-07-31",
       "anthropic-dangerous-direct-browser-access": "true",
     });
   });

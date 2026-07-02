@@ -1,7 +1,12 @@
+import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import type { Settings } from "../settings/types";
 import { getProvider, listProviders } from "./index";
+
+// Discovery now routes through the proxied fetch (@tauri-apps/plugin-http),
+// not the webview global fetch — mock the plugin module.
+vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }));
 
 // Exact discovery endpoint each first-class profile must hit. Guards against
 // regressions like Groq dropping /openai, or DeepSeek adding/removing /v1.
@@ -122,24 +127,24 @@ describe("profile contract", () => {
 });
 
 describe("first-class OpenAI-compatible fetchModels", () => {
+  const mockedFetch = vi.mocked(httpFetch);
   afterEach(() => {
-    vi.unstubAllGlobals();
+    mockedFetch.mockReset();
   });
 
   for (const id of NO_PRICING_FIRST_CLASS_IDS) {
     it(`${id} hits ${FETCH_MODELS_URLS[id]} with Bearer auth and maps data[].id`, async () => {
       const profile = getProvider(id);
       if (!profile?.fetchModels) throw new Error(`${id} missing fetchModels`);
-      const fetchMock = vi.fn(async () => ({
+      mockedFetch.mockResolvedValue({
         ok: true,
         json: async () => ({ data: [{ id: "model-a" }, { id: "model-b" }] }),
-      }));
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+      } as unknown as Response);
 
       const models = await profile.fetchModels("test-key", DEFAULT_SETTINGS);
 
       expect(models).toEqual(["model-a", "model-b"]);
-      expect(fetchMock).toHaveBeenCalledWith(FETCH_MODELS_URLS[id], {
+      expect(mockedFetch).toHaveBeenCalledWith(FETCH_MODELS_URLS[id], {
         headers: { Authorization: "Bearer test-key" },
       });
     });
@@ -148,25 +153,56 @@ describe("first-class OpenAI-compatible fetchModels", () => {
   it("tolerates a response with no data array (returns [])", async () => {
     const profile = getProvider("openrouter");
     if (!profile?.fetchModels) throw new Error("unreachable");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: true, json: async () => ({}) })) as unknown as typeof fetch,
-    );
+    mockedFetch.mockResolvedValue({ ok: true, json: async () => ({}) } as unknown as Response);
     expect(await profile.fetchModels("k", DEFAULT_SETTINGS)).toEqual([]);
   });
 
   it("throws on a non-ok response (surfaces status)", async () => {
     const profile = getProvider("groq");
     if (!profile?.fetchModels) throw new Error("unreachable");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: false,
-        status: 401,
-        statusText: "Unauthorized",
-      })) as unknown as typeof fetch,
-    );
+    mockedFetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+    } as unknown as Response);
     await expect(profile.fetchModels("k", DEFAULT_SETTINGS)).rejects.toThrow(/401/);
+  });
+});
+
+describe("anthropic egress via proxied fetch (CP1)", () => {
+  const mockedFetch = vi.mocked(httpFetch);
+  afterEach(() => {
+    mockedFetch.mockReset();
+  });
+
+  it("headers() keeps the browser-access opt-in (plugin-http injects Origin) and the caching beta", () => {
+    const profile = getProvider("anthropic");
+    if (!profile?.headers) throw new Error("unreachable");
+    const h = profile.headers();
+    expect(h["anthropic-beta"]).toBe("prompt-caching-2024-07-31");
+    // Required because @tauri-apps/plugin-http injects an Origin header we can't
+    // strip; without this Anthropic returns 401 (found in CP1 smoke).
+    expect(h["anthropic-dangerous-direct-browser-access"]).toBe("true");
+  });
+
+  it("fetchModels routes through the proxied fetch with x-api-key + version + browser-access", async () => {
+    const profile = getProvider("anthropic");
+    if (!profile?.fetchModels) throw new Error("unreachable");
+    mockedFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ id: "claude-x" }] }),
+    } as unknown as Response);
+
+    const models = await profile.fetchModels("sk-test", DEFAULT_SETTINGS);
+
+    expect(models).toEqual(["claude-x"]);
+    expect(mockedFetch).toHaveBeenCalledWith("https://api.anthropic.com/v1/models", {
+      headers: {
+        "x-api-key": "sk-test",
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+    });
   });
 });
 

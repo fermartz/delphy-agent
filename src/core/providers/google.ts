@@ -1,5 +1,6 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { ProviderProfile } from "./types";
 
 const MODELS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -20,13 +21,13 @@ export const googleProfile: ProviderProfile = {
   secretKey: "google_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel => {
-    const google = createGoogleGenerativeAI({ apiKey });
+    const google = createGoogleGenerativeAI({ apiKey, fetch: proxiedFetch });
     return google(modelId);
   },
 
   fetchModels: async (apiKey: string): Promise<string[]> => {
     // Google's models endpoint uses ?key= query param rather than a bearer header.
-    const response = await fetch(`${MODELS_ENDPOINT}?key=${encodeURIComponent(apiKey)}`);
+    const response = await proxiedFetch(`${MODELS_ENDPOINT}?key=${encodeURIComponent(apiKey)}`);
     if (!response.ok) {
       throw new Error(`Google /v1beta/models failed: ${response.status} ${response.statusText}`);
     }

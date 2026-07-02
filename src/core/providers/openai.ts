@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { ProviderProfile } from "./types";
 
 const MODELS_ENDPOINT = "https://api.openai.com/v1/models";
@@ -22,12 +23,12 @@ export const openaiProfile: ProviderProfile = {
   secretKey: "openai_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel => {
-    const openai = createOpenAI({ apiKey });
+    const openai = createOpenAI({ apiKey, fetch: proxiedFetch });
     return openai(modelId);
   },
 
   fetchModels: async (apiKey: string): Promise<string[]> => {
-    const response = await fetch(MODELS_ENDPOINT, {
+    const response = await proxiedFetch(MODELS_ENDPOINT, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {

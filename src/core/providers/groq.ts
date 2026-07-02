@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
+import { proxiedFetch } from "../net/proxied-fetch";
 import type { ProviderProfile } from "./types";
 
 // Groq — note the path is /openai/v1 (NOT /v1). Verified 2026-06-02; see
@@ -14,10 +15,10 @@ export const groqProfile: ProviderProfile = {
   secretKey: "groq_api_key",
 
   model: (apiKey: string, modelId: string): LanguageModel =>
-    createOpenAI({ apiKey, baseURL: BASE_URL })(modelId),
+    createOpenAI({ apiKey, baseURL: BASE_URL, fetch: proxiedFetch })(modelId),
 
   fetchModels: async (apiKey: string): Promise<string[]> => {
-    const response = await fetch(`${BASE_URL}/models`, {
+    const response = await proxiedFetch(`${BASE_URL}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!response.ok) {
