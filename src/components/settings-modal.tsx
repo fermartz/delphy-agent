@@ -611,8 +611,8 @@ function McpServerForm({
           </Select>
           {isRemote ? (
             <div className="text-[11px] text-muted-foreground">
-              Remote transports are not yet connectable — the server will be saved but show as
-              failed until HTTP/SSE support lands.
+              This connects Delphy to an external server you control. Requests — and any secret
+              headers you configure — are sent to this URL. Only add servers you trust.
             </div>
           ) : null}
         </div>

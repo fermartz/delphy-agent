@@ -6,6 +6,7 @@ import {
   replaceMcpConfigs,
   seedMcpConfigs,
 } from "../db/mcp";
+import { validateProxiedEgressUrl } from "../net/validate-egress-url";
 import type { McpServerConfig } from "./types";
 
 const LEGACY_STORE_FILE = "settings.json";
@@ -14,40 +15,24 @@ const LEGACY_MIGRATED_FLAG = "_mcp_migrated";
 
 const MCP_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 const LITERAL_KEY_PATTERN = /^(sk-ant-|sk-)[A-Za-z0-9]/;
-// IPv6 loopback ([::1]) is intentionally omitted: the Tauri HTTP capability
-// scope can't express a bracketed-IPv6 url pattern, so allowing it here would
-// pass validation but be blocked at the network layer. localhost / 127.0.0.1
-// cover local dev servers.
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
-
-/** True for `http://` URLs whose host is loopback (local dev servers). */
-function isLoopbackHttp(url: URL): boolean {
-  return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
-}
 
 /**
  * Validate a remote (http/sse) server URL. Returns an error message, or null if
- * the URL is acceptable: https everywhere, plain http only for loopback hosts.
- * Shared by the Settings form (`validateMcpConfig`) AND the boot/transport path
- * (`McpManager.bootOne`) so a persisted/migrated config can't smuggle a
- * non-https URL past the form into the transport.
+ * acceptable: https everywhere, plain http only for loopback hosts, no embedded
+ * credentials. Shared by the Settings form (`validateMcpConfig`) AND the
+ * boot/transport path (`McpManager.bootOne`) so a persisted/migrated config
+ * can't smuggle a bad URL past the form into the transport.
+ *
+ * A user-configured MCP URL uses the permissive host policy (D1 = broad + a UI
+ * warning): local/LAN servers are legitimate, so private hosts are allowed —
+ * unlike untrusted-content egress (image loads), which blocks them. See
+ * `validateProxiedEgressUrl`.
  */
 export function remoteUrlError(rawUrl: string | undefined): string | null {
-  const url = rawUrl?.trim();
-  if (!url) return "URL is required for HTTP/SSE transport";
-  let parsed: URL | null = null;
-  try {
-    parsed = new URL(url);
-  } catch {
-    parsed = null;
-  }
-  if (!parsed) return "URL is not valid";
-  // Egress goes through the capability-scoped Tauri HTTP boundary; require https
-  // except for loopback http (local dev servers).
-  if (parsed.protocol !== "https:" && !isLoopbackHttp(parsed)) {
-    return "URL must use https (http is allowed only for localhost)";
-  }
-  return null;
+  return validateProxiedEgressUrl(rawUrl, {
+    requireHttpsExceptLoopback: true,
+    allowPrivateHosts: true,
+  });
 }
 
 const McpServerConfigSchema = z.object({
