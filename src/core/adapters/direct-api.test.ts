@@ -370,6 +370,52 @@ describe("directApiAdapter — auto-compaction trigger (B.2)", () => {
     await session.close();
   });
 
+  it("rejects a re-entrant sendMessage while parked in pre-stream setup (compacting)", async () => {
+    // Regression for the compaction re-entrancy window: the turn is claimed as
+    // "preparing" the instant it's accepted, so a second sendMessage that
+    // arrives while the first is still in auto-compaction (before streaming) is
+    // rejected rather than interleaving and clobbering this.messages.
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
+    let resolveCompaction!: () => void;
+    mockedCompactMessages.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCompaction = () =>
+            resolve({
+              unchanged: false,
+              compactedMessages: [{ role: "user", content: "compacted" }],
+              summary: "s",
+              metrics: { before: 10, after: 3, estimatedTokensSaved: 50_000 },
+            } as Any);
+        }),
+    );
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+
+    const sendPromise1 = session.sendMessage(HUGE_TEXT); // parks in compaction
+    await new Promise((r) => setTimeout(r, 10));
+
+    await session.sendMessage("second while preparing"); // must be rejected
+
+    resolveCompaction();
+    await sendPromise1;
+
+    const events: AgentEvent[] = [];
+    while (true) {
+      const r = await iter.next();
+      if (r.done) break;
+      events.push(r.value);
+      if (events.filter((e) => e.type === "done").length >= 2) break;
+    }
+
+    const errors = events.filter((e) => e.type === "error");
+    expect(
+      errors.some((e) => e.type === "error" && e.error.message.includes("turn is in progress")),
+    ).toBe(true);
+    await session.close();
+  });
+
   it("auto-trigger failure emits a failure system_message and chat continues normally", async () => {
     mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "ok" }]));
     mockedCompactMessages.mockRejectedValueOnce(new Error("aux down"));

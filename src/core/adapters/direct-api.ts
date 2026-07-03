@@ -142,7 +142,10 @@ function inferRuntimeErrorKind(err: unknown): RuntimeErrorKind {
   return "unknown";
 }
 
-type TurnState = "idle" | "streaming" | "awaiting_approval" | "closed";
+// "preparing" is claimed the instant a turn is accepted — before the async
+// setup (persist + auto-compaction) that precedes streaming — so a re-entrant
+// sendMessage can't interleave in that window (see sendMessage).
+type TurnState = "idle" | "preparing" | "streaming" | "awaiting_approval" | "closed";
 
 interface PendingApproval {
   approvalId: string;
@@ -400,44 +403,52 @@ class DirectApiSession implements Session {
       return;
     }
 
-    this.messages.push({ role: "user", content: text });
-    await this.flushPersist();
-
-    const tokensUsed = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
-    if (tokensUsed > CONTEXT_LIMIT_TOKENS * CONTEXT_WARN_THRESHOLD) {
-      this.emitEvent({
-        type: "text",
-        delta:
-          `[delphy:context-warning] Context is near the model limit (${tokensUsed.toLocaleString()} / ${CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens estimated). ` +
-          `Auto-compaction will fire at ${Math.round(AUTO_COMPACT_THRESHOLD * 100)}% of the limit. Type /compact to compact now.\n\n`,
-      });
-    }
-
-    const profile = getProvider(this.providerId);
-    if (!profile) {
-      this.emitEvent({
-        type: "error",
-        error: new Error(`Provider "${this.providerId}" not found in registry`),
-        kind: "unknown",
-      });
-      this.emitEvent({ type: "done", reason: "error" });
-      return;
-    }
-
+    // Claim the turn NOW. The guard above only rejects re-entrancy once
+    // turnState is non-idle, but nothing set that until streaming began — so a
+    // second sendMessage during the async setup (persist + auto-compaction)
+    // could interleave and clobber this.messages / the compaction snapshot. The
+    // UI gates this via its streaming flag, but the adapter must not depend on
+    // that (a programmatic / inbound-MCP driver can call sendMessage directly).
+    this.turnState = "preparing";
     this.currentAbort = new AbortController();
 
-    const allowedByAntiThrashing =
-      this.lastCompactionSavedRatio === null ||
-      this.lastCompactionSavedRatio >= ANTI_THRASHING_MIN_SAVED_RATIO;
-    if (
-      tokensUsed > CONTEXT_LIMIT_TOKENS * AUTO_COMPACT_THRESHOLD &&
-      allowedByAntiThrashing &&
-      !this.compactionInFlight
-    ) {
-      await this.runAutoCompaction();
-    }
-
     try {
+      this.messages.push({ role: "user", content: text });
+      await this.flushPersist();
+
+      const tokensUsed = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
+      if (tokensUsed > CONTEXT_LIMIT_TOKENS * CONTEXT_WARN_THRESHOLD) {
+        this.emitEvent({
+          type: "text",
+          delta:
+            `[delphy:context-warning] Context is near the model limit (${tokensUsed.toLocaleString()} / ${CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens estimated). ` +
+            `Auto-compaction will fire at ${Math.round(AUTO_COMPACT_THRESHOLD * 100)}% of the limit. Type /compact to compact now.\n\n`,
+        });
+      }
+
+      const profile = getProvider(this.providerId);
+      if (!profile) {
+        this.emitEvent({
+          type: "error",
+          error: new Error(`Provider "${this.providerId}" not found in registry`),
+          kind: "unknown",
+        });
+        this.emitEvent({ type: "done", reason: "error" });
+        this.turnState = "idle";
+        return;
+      }
+
+      const allowedByAntiThrashing =
+        this.lastCompactionSavedRatio === null ||
+        this.lastCompactionSavedRatio >= ANTI_THRASHING_MIN_SAVED_RATIO;
+      if (
+        tokensUsed > CONTEXT_LIMIT_TOKENS * AUTO_COMPACT_THRESHOLD &&
+        allowedByAntiThrashing &&
+        !this.compactionInFlight
+      ) {
+        await this.runAutoCompaction();
+      }
+
       for (let cycle = 0; cycle < APPROVAL_CYCLE_CAP; cycle++) {
         this.turnState = "streaming";
         this.pendingApprovals.clear();
