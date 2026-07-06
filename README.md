@@ -16,7 +16,7 @@ The full vision and the eleven principles live in [docs/VISION.md](docs/VISION.m
 
 - **Multi-provider direct-API chat** — 8 providers via the Vercel AI SDK behind a per-provider `ProviderProfile`: native `anthropic` / `openai` / `google` / `xai`, first-class OpenAI-compatible `openrouter` / `kimi` / `deepseek` / `groq`, plus a generic Custom OpenAI-compatible profile. Real token streaming, (Provider, Model) pickers, lazy model discovery.
 - **Codex backend (Slice A)** — drives `codex mcp-server` over the MCP bridge as a second backend (read-only turn loop; selectable via a Settings toggle). Claude Code is deferred.
-- **MCP plugins, fully wired** — Rust stdio bridge for local servers plus remote transports (Streamable HTTP + legacy SSE), tool calls with an approval flow, and CRUD management from the Settings UI. Secrets are referenced via `${secret:<key>}` placeholders, never inlined.
+- **MCP plugins, fully wired** — Rust stdio bridge for local servers plus remote transports (Streamable HTTP + legacy SSE), tool calls with an approval flow, CRUD management and per-tool enable/disable from the Settings UI. Secrets are referenced via `${secret:<key>}` placeholders, never inlined.
 - **SQLite session persistence** — sessions persist incrementally and resume on boot; a session sidebar lists and switches between them. A built-in `update_memory` tool gives the agent durable memory across sessions.
 - **Context compaction** — structured head/middle/tail auto-compaction plus a manual `/compact`, with a `/status` command for token/cost accounting.
 - **Three-tier system prompt**, OS-keychain secret store, a 6-theme system with live reload, and tabbed Settings (Providers / Models / Plugins / Appearance).
@@ -52,7 +52,59 @@ Other useful commands:
 
 Tauri v2 (Rust shell) + React 19 + TypeScript + Tailwind v4 + shadcn in the webview. Most logic lives in TypeScript; the Rust side is a thin layer for system access (OS keychain, MCP stdio bridge, theme file watching).
 
+The Rust shell is the **trust boundary**: secrets stay in the OS keychain, subprocesses are spawned only by Rust, and all network egress leaves through a Rust-proxied HTTP layer behind a strict CSP and an SSRF guard. The webview never holds a raw capability.
+
+```mermaid
+flowchart TB
+    subgraph webview["Webview - TypeScript"]
+        ui["React UI<br/>hooks + components"]
+        core["Agent core<br/>adapters / providers / MCP client<br/>session manager / compaction"]
+        ui <--> core
+    end
+
+    subgraph rust["Rust shell - trust boundary (Tauri v2)"]
+        secrets["OS keychain<br/>secrets"]
+        bridge["MCP stdio bridge"]
+        db[("SQLite<br/>sessions / messages / MCP configs")]
+        http["Proxied HTTP<br/>strict CSP + SSRF guard"]
+    end
+
+    subgraph children["Subprocess children"]
+        mcp["MCP stdio servers"]
+        codexchild["codex mcp-server"]
+    end
+
+    subgraph external["External services"]
+        llm["LLM provider APIs"]
+        rmcp["Remote MCP servers<br/>Streamable HTTP / SSE"]
+    end
+
+    core -->|"Tauri IPC<br/>capability-scoped"| secrets
+    core -->|"Tauri IPC"| bridge
+    core -->|"SQL"| db
+    core -->|"fetch"| http
+    bridge <-->|"stdio"| mcp
+    bridge <-->|"stdio"| codexchild
+    http -->|"HTTPS"| llm
+    http -->|"HTTPS"| rmcp
+```
+
 Each backend is an **adapter** exposing the same contract — it accepts a turn and emits a stream of `AgentEvent`s (text deltas, tool calls, token usage, lifecycle). Three adapters are registered today: `directApiAdapter` (multi-provider), `codexAdapter` (Codex), and `echoAdapter` (boot fallback + test fixture). The active backend is chosen in Settings. MCP plugins attach to any active backend.
+
+```mermaid
+flowchart LR
+    input["User turn"] --> adapter{"Active<br/>adapter"}
+    adapter --> direct["directApiAdapter<br/>Vercel AI SDK"]
+    adapter --> codex["codexAdapter<br/>drives codex mcp-server"]
+    adapter --> echo["echoAdapter<br/>fallback + test fixture"]
+    direct --> profiles["ProviderProfile x8<br/>anthropic / openai / google / xai<br/>openrouter / kimi / deepseek / groq"]
+    direct <--> tools["MCP tools<br/>approval flow"]
+    direct --> events["AgentEvent stream<br/>text / tool_call / approval_request<br/>usage / context_usage / done"]
+    codex --> events
+    echo --> events
+    events --> reducer["Pure items reducer"]
+    reducer --> chat["Chat UI"]
+```
 
 ### Repository layout
 
@@ -83,9 +135,9 @@ This is honest scoping, not a roadmap.
 - **Claude Code backend** — deferred; `claude mcp serve` exposes tools, not a driveable agent (see [docs/DECISIONS.md](docs/DECISIONS.md) 2026-05-26).
 - **Codex Slice B/C** — current Codex support is read-only; approvals + `workspace-write` sandbox and feeding Codex the user's MCP servers are pending.
 - **OAuth-authed remote MCP** — remote transports ship with static header/bearer auth only; OAuth and WebSocket transport are not implemented.
-- **Per-tool enable/disable and progressive tool disclosure** — every connected MCP tool's schema loads every turn.
+- **Progressive tool disclosure** — per-tool enable/disable ships (Settings → Plugins), but every *enabled* tool's schema still loads each turn; tool-search indirection is deferred until tool counts warrant it.
 - **Local / no-key providers** (Ollama, LM Studio) and a Custom-profile base-URL edit UI — the Custom profile is currently configured via the settings file only. No non-(key+baseURL) auth (e.g. AWS Bedrock SigV4).
-- **CI, code signing, notarization, auto-updater** — none yet.
+- **Code signing, notarization, auto-updater** — none yet (CI gates lint/typecheck/test/build + cargo on every push).
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for what's been decided and why; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) § "Open questions" for what hasn't.
 
