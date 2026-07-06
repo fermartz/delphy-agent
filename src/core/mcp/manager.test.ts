@@ -139,8 +139,9 @@ describe("McpManager", () => {
 
     const tools = mgr.getAllTools();
     expect(tools).toHaveLength(2);
-    expect(tools.map((t) => t.namespacedName)).toEqual(["test-server__echo", "test-server__add"]);
-    expect(tools[0]).toMatchObject({
+    // Sorted by tool name (BACKLOG #18 cache-stable ordering), not server order.
+    expect(tools.map((t) => t.namespacedName)).toEqual(["test-server__add", "test-server__echo"]);
+    expect(tools[1]).toMatchObject({
       serverId: "test-server",
       name: "echo",
       namespacedName: "test-server__echo",
@@ -538,5 +539,111 @@ describe("McpManager", () => {
       kind: "failed",
     });
     expect(status[0].error).toContain("missing_key");
+  });
+
+  describe("per-tool disable + cache-stable ordering (BACKLOG #18)", () => {
+    const SECOND_CONFIG: McpServerConfig = {
+      id: "alpha-server",
+      name: "Alpha",
+      enabled: true,
+      transport: "stdio",
+      command: "echo",
+    };
+
+    function stubStdioBoot() {
+      mockedInvoke.mockImplementation((async (cmd: string) => {
+        if (cmd === "spawn_mcp_server") return "handle";
+        if (cmd === "stop_mcp_server") return undefined;
+        return undefined;
+      }) as typeof invoke);
+      connectMock.mockResolvedValue(undefined);
+      listToolsMock.mockResolvedValue({
+        tools: [
+          { name: "zeta", inputSchema: { type: "object" } },
+          { name: "alpha", inputSchema: { type: "object" } },
+        ],
+      });
+    }
+
+    it("getAllTools filters disabledTools and sorts by serverId then name", async () => {
+      stubStdioBoot();
+      const mgr = new _McpManagerForTests();
+      await mgr.init([{ ...ENABLED_CONFIG, disabledTools: ["zeta"] }, SECOND_CONFIG]);
+
+      const names = mgr.getAllTools().map((t) => t.namespacedName);
+      expect(names).toEqual(["alpha-server__alpha", "alpha-server__zeta", "test-server__alpha"]);
+    });
+
+    it("getAllTools output is byte-stable across consecutive calls", async () => {
+      stubStdioBoot();
+      const mgr = new _McpManagerForTests();
+      await mgr.init([SECOND_CONFIG, ENABLED_CONFIG]);
+
+      const first = JSON.stringify(mgr.getAllTools());
+      const second = JSON.stringify(mgr.getAllTools());
+      expect(second).toBe(first);
+    });
+
+    it("getServerTools returns the unfiltered sorted list for the Settings UI", async () => {
+      stubStdioBoot();
+      const mgr = new _McpManagerForTests();
+      await mgr.init([{ ...ENABLED_CONFIG, disabledTools: ["zeta"] }]);
+
+      expect(mgr.getServerTools("test-server").map((t) => t.name)).toEqual(["alpha", "zeta"]);
+      expect(mgr.getServerTools("unknown")).toEqual([]);
+    });
+
+    it("callTool rejects a disabled tool without reaching the client", async () => {
+      stubStdioBoot();
+      const mgr = new _McpManagerForTests();
+      await mgr.init([{ ...ENABLED_CONFIG, disabledTools: ["zeta"] }]);
+
+      const result = await mgr.callTool("test-server__zeta", {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("disabled");
+      expect(callToolMock).not.toHaveBeenCalled();
+    });
+
+    it("setDisabledTools applies without restart and bumps the revision", async () => {
+      stubStdioBoot();
+      const mgr = new _McpManagerForTests();
+      await mgr.init([ENABLED_CONFIG]);
+      const spawnCallsAfterInit = mockedInvoke.mock.calls.filter(
+        (c) => c[0] === "spawn_mcp_server",
+      ).length;
+      const revBefore = mgr.getRevision();
+
+      mgr.setDisabledTools("test-server", ["alpha"]);
+
+      expect(mgr.getRevision()).toBeGreaterThan(revBefore);
+      expect(mgr.getAllTools().map((t) => t.name)).toEqual(["zeta"]);
+      // No restart: no additional spawn, no stop.
+      expect(mockedInvoke.mock.calls.filter((c) => c[0] === "spawn_mcp_server").length).toBe(
+        spawnCallsAfterInit,
+      );
+      expect(mockedInvoke.mock.calls.some((c) => c[0] === "stop_mcp_server")).toBe(false);
+
+      // Re-enable: clears the filter.
+      mgr.setDisabledTools("test-server", undefined);
+      expect(mgr.getAllTools().map((t) => t.name)).toEqual(["alpha", "zeta"]);
+    });
+
+    it("revision bumps on addServer, removeServer, and shutdown", async () => {
+      stubStdioBoot();
+      const mgr = new _McpManagerForTests();
+      await mgr.init([ENABLED_CONFIG]);
+      let rev = mgr.getRevision();
+
+      await mgr.addServer(SECOND_CONFIG);
+      expect(mgr.getRevision()).toBeGreaterThan(rev);
+      rev = mgr.getRevision();
+
+      await mgr.removeServer(SECOND_CONFIG.id);
+      expect(mgr.getRevision()).toBeGreaterThan(rev);
+      rev = mgr.getRevision();
+
+      await mgr.shutdown();
+      expect(mgr.getRevision()).toBeGreaterThan(rev);
+    });
   });
 });

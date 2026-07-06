@@ -47,18 +47,31 @@ class McpManager {
   private servers = new Map<string, ServerEntry>();
   private initPromise: Promise<void> | null = null;
   private initDone = false;
+  // Bumped on every mutation that can change the model-facing tool surface
+  // (server connect/fail/disable, removal, shutdown, per-tool toggles).
+  // Consumers memoize derived artifacts (the streamText ToolSet, the
+  // system-prompt tool context) keyed on this, so the tools payload stays
+  // byte-stable across turns — a prompt-cache prefix — and is rebuilt only
+  // when the user actually changes MCP state. (BACKLOG #18)
+  private revision = 0;
+
+  getRevision(): number {
+    return this.revision;
+  }
 
   async init(configs: McpServerConfig[]): Promise<void> {
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
       await Promise.all(configs.map((config) => this.bootOne(config)));
       this.initDone = true;
+      this.revision++;
     })();
     return this.initPromise;
   }
 
   async addServer(config: McpServerConfig): Promise<void> {
     await this.bootOne(config);
+    this.revision++;
   }
 
   async removeServer(id: string): Promise<void> {
@@ -67,6 +80,7 @@ class McpManager {
       await this.disconnect(entry.data);
     }
     this.servers.delete(id);
+    this.revision++;
   }
 
   /**
@@ -102,6 +116,21 @@ class McpManager {
   async restartServer(config: McpServerConfig): Promise<void> {
     await this.removeServer(config.id);
     await this.bootOne(config);
+    this.revision++;
+  }
+
+  /**
+   * Apply a per-tool disable list to an already-booted server without
+   * restarting it (read-time filter — the server keeps its full tool list;
+   * we only trim what `getAllTools` forwards to the model). Call this on a
+   * `disabledTools`-only config save instead of `restartServer`. No-op if the
+   * id is unknown.
+   */
+  setDisabledTools(id: string, disabledTools: string[] | undefined): void {
+    const entry = this.servers.get(id);
+    if (!entry) return;
+    entry.data.config = { ...entry.data.config, disabledTools };
+    this.revision++;
   }
 
   isInitialized(): boolean {
@@ -113,18 +142,42 @@ class McpManager {
   }
 
   /**
-   * Flattened list of tools across all connected servers, namespaced by
-   * `<serverId>__<toolName>` to prevent collisions. Returns `[]` if init
-   * hasn't completed. Consumed by slice B for `streamText({ tools })`.
+   * Flattened list of MODEL-FACING tools across all connected servers,
+   * namespaced by `<serverId>__<toolName>` to prevent collisions. Returns
+   * `[]` if init hasn't completed. Consumed by `streamText({ tools })`.
+   *
+   * Tools the user disabled (`config.disabledTools`) are filtered out here —
+   * the manager boundary is the single filtering point, so the tool set, the
+   * system-prompt tool context, and call routing all agree. Output is sorted
+   * (serverId, then tool name) so the serialized tools payload is byte-stable
+   * across turns regardless of Map insertion order. The Settings UI needs the
+   * unfiltered list — see `getServerTools`.
    */
   getAllTools(): McpTool[] {
     const out: McpTool[] = [];
     for (const entry of this.servers.values()) {
-      if (entry.kind === "connected") {
-        out.push(...entry.data.tools);
-      }
+      if (entry.kind !== "connected") continue;
+      const disabled = new Set(entry.data.config.disabledTools ?? []);
+      out.push(...entry.data.tools.filter((t) => !disabled.has(t.name)));
     }
+    out.sort((a, b) =>
+      a.serverId === b.serverId
+        ? a.name.localeCompare(b.name)
+        : a.serverId.localeCompare(b.serverId),
+    );
     return out;
+  }
+
+  /**
+   * UNFILTERED tool list for one connected server (disabled tools included),
+   * for the Settings UI's per-tool toggles — a disabled tool must stay
+   * listed so the user can re-enable it. Returns `[]` when the server isn't
+   * connected. The model-facing path must use `getAllTools`.
+   */
+  getServerTools(serverId: string): McpTool[] {
+    const entry = this.servers.get(serverId);
+    if (!entry || entry.kind !== "connected") return [];
+    return [...entry.data.tools].sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async callTool(namespacedName: string, args: unknown): Promise<McpToolResult> {
@@ -141,6 +194,15 @@ class McpManager {
     if (!entry || entry.kind !== "connected") {
       return {
         content: [{ type: "text", text: `MCP server "${serverId}" is not connected` }],
+        isError: true,
+      };
+    }
+    // Defense-in-depth for the read-time filter: a disabled tool should never
+    // be offered to the model (getAllTools filters it), but a stale/cached
+    // tool set or a mid-turn toggle could still route a call here.
+    if (entry.data.config.disabledTools?.includes(toolName)) {
+      return {
+        content: [{ type: "text", text: `Tool "${toolName}" is disabled by the user in Settings` }],
         isError: true,
       };
     }
@@ -174,6 +236,7 @@ class McpManager {
     this.servers.clear();
     this.initPromise = null;
     this.initDone = false;
+    this.revision++;
   }
 
   private async bootOne(config: McpServerConfig): Promise<void> {

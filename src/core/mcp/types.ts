@@ -19,6 +19,14 @@ export interface McpServerConfig {
   url?: string;
   headers?: Record<string, string>;
   scopes?: string[];
+  /**
+   * Tool names (un-namespaced, as reported by the server) the user has turned
+   * off. Disabled tools stay out of the model-facing tool set and tool
+   * context (token frugality, BACKLOG #18) but remain listed in Settings so
+   * they can be re-enabled. A read-time filter: toggling never restarts the
+   * server. Stale names (tools the server no longer reports) are ignored.
+   */
+  disabledTools?: string[];
 }
 
 export type McpServerStatusKind = "connecting" | "connected" | "failed" | "disabled";

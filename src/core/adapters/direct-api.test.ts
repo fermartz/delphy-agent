@@ -33,10 +33,12 @@ vi.mock("../session/compactor", async () => {
 
 const mockGetAllTools = vi.fn();
 const mockCallTool = vi.fn();
+const mockGetRevision = vi.fn();
 vi.mock("../mcp/manager", () => ({
   mcpManager: {
     getAllTools: (...args: unknown[]) => mockGetAllTools(...args),
     callTool: (...args: unknown[]) => mockCallTool(...args),
+    getRevision: (...args: unknown[]) => mockGetRevision(...args),
   },
 }));
 
@@ -54,7 +56,7 @@ import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-t
 import { clearRuntimeKey, getRuntimeKey, setRuntimeKey } from "../providers/anthropic-runtime-key";
 import { compactMessages } from "../session/compactor";
 import type { AgentEvent, Session } from "../types";
-import { BootError, directApiAdapter } from "./direct-api";
+import { _resetToolArtifactsCacheForTests, BootError, directApiAdapter } from "./direct-api";
 
 const mockedInvoke = vi.mocked(invoke);
 const mockedStreamText = vi.mocked(streamText);
@@ -123,6 +125,11 @@ beforeEach(() => {
     metrics: { before: 0, after: 0, estimatedTokensSaved: 0 },
   } as Any);
   mockGetAllTools.mockReturnValue([]);
+  // Each test gets a fresh memoization cache; the default revision is stable
+  // so per-test getAllTools stubs are picked up on the first build.
+  mockGetRevision.mockReset();
+  mockGetRevision.mockReturnValue(0);
+  _resetToolArtifactsCacheForTests();
   clearRuntimeKey();
 });
 
@@ -1143,6 +1150,170 @@ describe("directApiAdapter — built-in update_memory tool", () => {
     const sys = call?.system as Array<{ content: string }> | undefined;
     expect(sys?.[0].content).toContain("User memory");
     expect(sys?.[0].content).toContain("User likes concise answers");
+    await session.close();
+  });
+});
+
+describe("directApiAdapter — tool-set memoization (BACKLOG #18)", () => {
+  const MCP_TOOL = {
+    serverId: "srv",
+    name: "search",
+    namespacedName: "srv__search",
+    description: "Searches.",
+    inputSchema: { type: "object" },
+  };
+
+  async function startSession(): Promise<Session> {
+    mockedInvoke.mockResolvedValueOnce("sk-ant-test");
+    return directApiAdapter.start({});
+  }
+
+  function toolsOfCall(n: number): Record<string, unknown> {
+    const call = mockedStreamText.mock.calls[n]?.[0] as { tools?: Record<string, unknown> };
+    if (!call?.tools) throw new Error(`no tools on streamText call ${n}`);
+    return call.tools;
+  }
+
+  it("reuses the same ToolSet across turns while the MCP revision is unchanged", async () => {
+    mockGetAllTools.mockReturnValue([MCP_TOOL]);
+    mockGetRevision.mockReturnValue(7);
+    mockedStreamText
+      .mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "one" }]))
+      .mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "two" }]));
+
+    const session = await startSession();
+    await session.sendMessage("first");
+    await session.sendMessage("second");
+
+    // Same object identity: built once, not once per stream iteration.
+    expect(toolsOfCall(1)).toBe(toolsOfCall(0));
+    expect(mockGetAllTools).toHaveBeenCalledTimes(1);
+    await session.close();
+  });
+
+  it("rebuilds the ToolSet when the MCP revision changes (e.g. a tool was toggled)", async () => {
+    mockGetAllTools.mockReturnValue([MCP_TOOL]);
+    mockGetRevision.mockReturnValue(1);
+    mockedStreamText
+      .mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "one" }]))
+      .mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "two" }]));
+
+    const session = await startSession();
+    await session.sendMessage("first");
+
+    // User disables the tool: manager bumps its revision and now reports no tools.
+    mockGetAllTools.mockReturnValue([]);
+    mockGetRevision.mockReturnValue(2);
+    await session.sendMessage("second");
+
+    expect(Object.keys(toolsOfCall(0))).toEqual(["update_memory", "srv__search"]);
+    expect(Object.keys(toolsOfCall(1))).toEqual(["update_memory"]);
+    await session.close();
+  });
+
+  it("the system-prompt tool context is byte-identical across turns at a stable revision", async () => {
+    mockGetAllTools.mockReturnValue([MCP_TOOL]);
+    mockGetRevision.mockReturnValue(3);
+    mockedStreamText
+      .mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "one" }]))
+      .mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "two" }]));
+
+    const session = await startSession();
+    await session.sendMessage("first");
+    await session.sendMessage("second");
+
+    const systemOf = (n: number) => {
+      const call = mockedStreamText.mock.calls[n]?.[0] as { system?: Array<{ content: string }> };
+      return call?.system?.[0]?.content ?? "";
+    };
+    expect(systemOf(0)).toContain("srv: search");
+    expect(systemOf(1)).toBe(systemOf(0));
+    await session.close();
+  });
+});
+
+describe("directApiAdapter — tools payload in the context estimate (BACKLOG #20)", () => {
+  const BIG_TOOL = {
+    serverId: "srv",
+    name: "search",
+    namespacedName: "srv__search",
+    description: "d".repeat(400),
+    inputSchema: {
+      type: "object",
+      properties: { q: { type: "string", description: "e".repeat(400) } },
+    },
+  };
+
+  async function startSession(): Promise<Session> {
+    mockedInvoke.mockResolvedValueOnce("sk-ant-test");
+    return directApiAdapter.start({});
+  }
+
+  function lastContextUsage(events: AgentEvent[]): { tokensUsed: number } {
+    const ev = events.filter((e) => e.type === "context_usage").pop();
+    if (!ev || ev.type !== "context_usage") throw new Error("no context_usage event");
+    return ev;
+  }
+
+  it("snapshot and live event both include the tools payload and report the same figure", async () => {
+    mockGetAllTools.mockReturnValue([]);
+    mockGetRevision.mockReturnValue(1);
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "a" }]));
+    const bare = await startSession();
+    const bareIter = bare.events[Symbol.asyncIterator]();
+    await bare.sendMessage("hi");
+    const bareCtx = lastContextUsage(await collectOneTurn(bareIter));
+    const bareSnapshot = (
+      bare as Session & { getUsageSnapshot: () => { contextTokens: number } }
+    ).getUsageSnapshot();
+    await bare.close();
+
+    _resetToolArtifactsCacheForTests();
+    mockGetAllTools.mockReturnValue([BIG_TOOL]);
+    mockGetRevision.mockReturnValue(2);
+    mockedStreamText.mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "a" }]));
+    const loaded = await startSession();
+    const loadedIter = loaded.events[Symbol.asyncIterator]();
+    await loaded.sendMessage("hi");
+    const loadedCtx = lastContextUsage(await collectOneTurn(loadedIter));
+    const loadedSnapshot = (
+      loaded as Session & { getUsageSnapshot: () => { contextTokens: number } }
+    ).getUsageSnapshot();
+    await loaded.close();
+
+    // The big tool's schema+description (~800+ chars ≈ 200+ tokens) must show
+    // up in BOTH the live event and the snapshot.
+    expect(loadedCtx.tokensUsed).toBeGreaterThan(bareCtx.tokensUsed + 150);
+    expect(loadedSnapshot.contextTokens).toBeGreaterThan(bareSnapshot.contextTokens + 150);
+    // Shared helper: event and snapshot agree exactly (same messages state).
+    expect(loadedSnapshot.contextTokens).toBe(loadedCtx.tokensUsed);
+  });
+
+  it("disabling tools (fewer tools at a new revision) shrinks both figures", async () => {
+    mockGetAllTools.mockReturnValue([BIG_TOOL]);
+    mockGetRevision.mockReturnValue(1);
+    mockedStreamText
+      .mockReturnValueOnce(fakeStreamResult([{ type: "text-delta", text: "a" }]))
+      .mockReturnValueOnce(
+        fakeStreamResult([{ type: "text-delta", text: "" }], { responseMessages: [] }),
+      );
+
+    const session = await startSession();
+    const iter = session.events[Symbol.asyncIterator]();
+    await session.sendMessage("hi");
+    const before = lastContextUsage(await collectOneTurn(iter));
+
+    // User disables the tool: the manager reports it gone at a new revision.
+    mockGetAllTools.mockReturnValue([]);
+    mockGetRevision.mockReturnValue(2);
+    await session.sendMessage("");
+    const after = lastContextUsage(await collectOneTurn(iter));
+    const snapshot = (
+      session as Session & { getUsageSnapshot: () => { contextTokens: number } }
+    ).getUsageSnapshot();
+
+    expect(after.tokensUsed).toBeLessThan(before.tokensUsed);
+    expect(snapshot.contextTokens).toBe(after.tokensUsed);
     await session.close();
   });
 });

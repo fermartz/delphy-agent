@@ -69,6 +69,7 @@ Each MCP server known to the app is stored as a row in the SQLite `mcp_servers` 
 | `url` | conditional | string | Required when `transport: "http"` or `"sse"` |
 | `headers` | no | `Record<string, string>` | For `http` / `sse`. Supports `${secret:<key>}` |
 | `scopes` | no | string[] | Reserved for future capability gating. Currently informational |
+| `disabledTools` | no | string[] | Tool names (as reported by the server, un-namespaced) the user has turned off. Disabled tools are excluded from the model-facing tool set but stay listed in Settings for re-enabling. Names the server no longer reports are ignored. Omitted when empty |
 
 ### Secret references
 

@@ -194,6 +194,37 @@ export function useMcpServers({ onToast }: UseMcpServersOptions) {
     [mcpConfigs, runMcpBoot],
   );
 
+  // Per-tool enable/disable (BACKLOG #18). A read-time filter: persist the
+  // updated disabledTools list and apply it to the live manager entry — the
+  // server itself is never restarted for a tool toggle. The manager bumps its
+  // revision so the adapter's memoized tool set rebuilds on the next turn.
+  const handleMcpToolToggle = useCallback(
+    async (serverId: string, toolName: string, enabled: boolean) => {
+      const config = mcpConfigs.find((c) => c.id === serverId);
+      if (!config) return;
+      const current = new Set(config.disabledTools ?? []);
+      if (enabled) current.delete(toolName);
+      else current.add(toolName);
+      // Sorted + undefined-when-empty keeps the persisted config JSON canonical.
+      const next = current.size > 0 ? [...current].sort() : undefined;
+      const updated = mcpConfigs.map((c) =>
+        c.id === serverId ? { ...c, disabledTools: next } : c,
+      );
+      setMcpConfigs(updated);
+      await saveMcpConfigs(updated);
+      mcpManager.setDisabledTools(serverId, next);
+    },
+    [mcpConfigs],
+  );
+
+  // Unfiltered tool list for the Settings UI's per-tool toggles (disabled
+  // tools must stay visible to be re-enabled). Stable identity so the
+  // memoized SettingsModal doesn't re-render during streaming.
+  const getMcpServerTools = useCallback(
+    (serverId: string) => mcpManager.getServerTools(serverId),
+    [],
+  );
+
   return {
     mcpStatuses,
     mcpConfigs,
@@ -202,5 +233,7 @@ export function useMcpServers({ onToast }: UseMcpServersOptions) {
     handleMcpRemove,
     handleMcpRestart,
     handleMcpToggle,
+    handleMcpToolToggle,
+    getMcpServerTools,
   };
 }

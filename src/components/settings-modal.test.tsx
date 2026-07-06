@@ -77,6 +77,8 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SettingsModa
       onMcpRemove={vi.fn()}
       onMcpRestart={vi.fn()}
       onMcpToggle={vi.fn()}
+      onMcpToolToggle={vi.fn()}
+      getMcpServerTools={vi.fn(() => [])}
       currentBackend="anthropic-api"
       onBackendChange={onBackendChange}
       codexWorkingDir={null}
@@ -224,6 +226,68 @@ describe("SettingsModal", () => {
     expect(screen.getByText("broken-one")).toBeInTheDocument();
     expect(screen.getByText("failed")).toBeInTheDocument();
     expect(screen.getByText(/SPAWN_FAILED: nope/)).toBeInTheDocument();
+  });
+
+  describe("per-tool toggles (BACKLOG #18)", () => {
+    const CONNECTED_STATUS = [{ id: "srv", name: "Srv", kind: "connected" as const, toolCount: 2 }];
+    const CONNECTED_CONFIG = [
+      { id: "srv", name: "Srv", enabled: true, transport: "stdio" as const, command: "npx" },
+    ];
+    const SRV_TOOLS = [
+      {
+        serverId: "srv",
+        name: "alpha",
+        namespacedName: "srv__alpha",
+        description: "Does alpha.",
+        inputSchema: {},
+      },
+      { serverId: "srv", name: "zeta", namespacedName: "srv__zeta", inputSchema: {} },
+    ];
+
+    it("Tools button expands the unfiltered tool list with per-tool switches", async () => {
+      const user = userEvent.setup();
+      const getMcpServerTools = vi.fn(() => SRV_TOOLS);
+      renderModal({
+        mcpStatuses: CONNECTED_STATUS,
+        mcpConfigs: [{ ...CONNECTED_CONFIG[0], disabledTools: ["zeta"] }],
+        getMcpServerTools,
+      });
+      await openTab(user, /plugins/i);
+      await user.click(screen.getByRole("button", { name: "Tools" }));
+
+      expect(getMcpServerTools).toHaveBeenCalledWith("srv");
+      // Disabled tools stay listed (unfiltered) so they can be re-enabled.
+      expect(screen.getByText("alpha")).toBeInTheDocument();
+      expect(screen.getByText("zeta")).toBeInTheDocument();
+      expect(screen.getByLabelText("Disable tool alpha")).toBeInTheDocument();
+      expect(screen.getByLabelText("Enable tool zeta")).toBeInTheDocument();
+    });
+
+    it("toggling a tool switch fires onMcpToolToggle with (serverId, toolName, enabled)", async () => {
+      const user = userEvent.setup();
+      const onMcpToolToggle = vi.fn();
+      renderModal({
+        mcpStatuses: CONNECTED_STATUS,
+        mcpConfigs: CONNECTED_CONFIG,
+        getMcpServerTools: vi.fn(() => SRV_TOOLS),
+        onMcpToolToggle,
+      });
+      await openTab(user, /plugins/i);
+      await user.click(screen.getByRole("button", { name: "Tools" }));
+      await user.click(screen.getByLabelText("Disable tool alpha"));
+
+      expect(onMcpToolToggle).toHaveBeenCalledWith("srv", "alpha", false);
+    });
+
+    it("the row summary shows the disabled-tool count", async () => {
+      const user = userEvent.setup();
+      renderModal({
+        mcpStatuses: CONNECTED_STATUS,
+        mcpConfigs: [{ ...CONNECTED_CONFIG[0], disabledTools: ["zeta"] }],
+      });
+      await openTab(user, /plugins/i);
+      expect(screen.getByText("(2 tools, 1 off)")).toBeInTheDocument();
+    });
   });
 
   it("Add server button opens the form", async () => {

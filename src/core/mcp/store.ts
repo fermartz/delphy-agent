@@ -46,6 +46,7 @@ const McpServerConfigSchema = z.object({
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   scopes: z.array(z.string()).optional(),
+  disabledTools: z.array(z.string()).optional(),
 });
 
 const McpServerConfigArraySchema = z.array(McpServerConfigSchema);

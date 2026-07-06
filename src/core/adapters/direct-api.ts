@@ -11,6 +11,7 @@ import {
 import { saveMemory } from "../db/memory";
 import { AuxiliaryClient } from "../llm/auxiliary";
 import { mcpManager } from "../mcp/manager";
+import type { McpTool } from "../mcp/types";
 import { buildSystemPrompt, defaultSystemPromptSlices } from "../prompts/three-tier";
 import { getProvider } from "../providers";
 import { getRuntimeKey } from "../providers/runtime-keys";
@@ -193,8 +194,65 @@ const UPDATE_MEMORY_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-function buildToolSet(): ToolSet | undefined {
-  const allTools = mcpManager.getAllTools();
+// The built ToolSet + tool-context string are pure functions of the MCP
+// manager's state, which only changes on user action (server add/remove/
+// restart, per-tool toggle). Memoizing on the manager's revision keeps the
+// per-turn tools payload byte-identical across normal turns — a stable
+// prompt-cache prefix — and skips rebuilding every stream iteration.
+// (BACKLOG #18 / audit 2026-07-02 finding #9.)
+let toolArtifactsCache: {
+  revision: number;
+  tools: ToolSet | undefined;
+  toolContext: string;
+  toolTokens: number;
+} | null = null;
+
+function getToolArtifacts(): {
+  tools: ToolSet | undefined;
+  toolContext: string;
+  toolTokens: number;
+} {
+  const revision = mcpManager.getRevision();
+  if (toolArtifactsCache?.revision !== revision) {
+    // One snapshot feeds all artifacts so the tool set, the tool-context
+    // string, and the token estimate can never disagree about which tools
+    // exist.
+    const allTools = mcpManager.getAllTools();
+    toolArtifactsCache = {
+      revision,
+      tools: buildToolSet(allTools),
+      toolContext: buildToolContext(allTools),
+      toolTokens: estimateToolTokens(allTools),
+    };
+  }
+  return toolArtifactsCache;
+}
+
+/**
+ * Estimated token weight of the `tools` payload sent to the provider each
+ * turn: every enabled tool's name + description + full JSON input schema,
+ * plus the built-in update_memory tool. Feeds the context-% figure so
+ * StatusBar and `/status` stop under-reporting when MCP tools are loaded
+ * (BACKLOG #20). Heuristic (chars/4), not billing-grade — same fidelity as
+ * the message estimator.
+ */
+function estimateToolTokens(allTools: McpTool[]): number {
+  let chars =
+    UPDATE_MEMORY_TOOL_NAME.length +
+    UPDATE_MEMORY_DESCRIPTION.length +
+    JSON.stringify(UPDATE_MEMORY_INPUT_SCHEMA).length;
+  for (const t of allTools) {
+    chars +=
+      t.namespacedName.length + (t.description?.length ?? 0) + JSON.stringify(t.inputSchema).length;
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN_ANTHROPIC);
+}
+
+export function _resetToolArtifactsCacheForTests(): void {
+  toolArtifactsCache = null;
+}
+
+function buildToolSet(allTools: McpTool[]): ToolSet | undefined {
   const toolSet: ToolSet = {};
 
   toolSet[UPDATE_MEMORY_TOOL_NAME] = tool({
@@ -247,8 +305,7 @@ function buildToolSet(): ToolSet | undefined {
   return toolSet;
 }
 
-function buildToolContext(): string {
-  const allTools = mcpManager.getAllTools();
+function buildToolContext(allTools: McpTool[]): string {
   if (allTools.length === 0) return "";
   const byServer = new Map<string, string[]>();
   for (const t of allTools) {
@@ -509,8 +566,7 @@ class DirectApiSession implements Session {
     profile: ReturnType<typeof getProvider> & {},
   ): Promise<IterationOutcome> {
     const model = profile.model(this.apiKey, this.modelId);
-    const tools = buildToolSet();
-    const toolContext = buildToolContext();
+    const { tools, toolContext } = getToolArtifacts();
     const systemContent = toolContext
       ? `${this.systemPrompt}\n\n${toolContext}`
       : this.systemPrompt;
@@ -638,9 +694,10 @@ class DirectApiSession implements Session {
       cachedInputTokens,
     });
 
-    // Live context-% indicator for the StatusBar (Parameter 16). Recomputed
-    // from the current in-memory messages + system prompt.
-    const ctxTokens = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
+    // Live context-% indicator for the StatusBar (Parameter 16). Shares
+    // estimateContextTokens with getUsageSnapshot so the StatusBar and
+    // /status can never disagree (plan-review 2026-07-06 R1).
+    const ctxTokens = this.estimateContextTokens();
     this.emitEvent({
       type: "context_usage",
       tokensUsed: ctxTokens,
@@ -656,6 +713,25 @@ class DirectApiSession implements Session {
   }
 
   /**
+   * The one context-size estimate: system prompt + tool context + the tools
+   * payload (BACKLOG #20) + messages. BOTH display paths — the live
+   * `context_usage` event (StatusBar) and `getUsageSnapshot` (`/status`) —
+   * must go through here so they always report the same figure. The
+   * compaction trigger deliberately keeps its own messages+prompt estimate:
+   * compaction can't shrink the tools payload, so counting it there would
+   * only invite threshold thrashing.
+   */
+  private estimateContextTokens(): number {
+    const { toolContext, toolTokens } = getToolArtifacts();
+    return (
+      estimateTokens(this.systemPrompt) +
+      (toolContext ? estimateTokens(toolContext) : 0) +
+      toolTokens +
+      estimateMessageTokens(this.messages)
+    );
+  }
+
+  /**
    * Snapshot of cumulative session usage. Consumed by `/status` (Parameter
    * 17) via `CommandContext.getStatus()` in CP6.
    */
@@ -668,7 +744,7 @@ class DirectApiSession implements Session {
     contextLimit: number;
     contextPercent: number;
   } {
-    const ctxTokens = estimateTokens(this.systemPrompt) + estimateMessageTokens(this.messages);
+    const ctxTokens = this.estimateContextTokens();
     return {
       inputTokens: this.totalInputTokens,
       outputTokens: this.totalOutputTokens,

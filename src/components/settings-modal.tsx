@@ -22,7 +22,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type McpConfigValidationError, validateMcpConfig } from "@/core/mcp/store";
-import type { McpServerConfig, McpServerStatus, McpTransport } from "@/core/mcp/types";
+import type { McpServerConfig, McpServerStatus, McpTool, McpTransport } from "@/core/mcp/types";
 import type { ProviderProfile } from "@/core/providers/types";
 import type { ColorMode, Settings } from "@/core/settings/types";
 import type { Theme } from "@/themes/types";
@@ -61,6 +61,8 @@ export interface SettingsModalProps {
   onMcpRemove: (id: string) => void;
   onMcpRestart: (id: string) => void;
   onMcpToggle: (id: string, enabled: boolean) => void;
+  onMcpToolToggle: (serverId: string, toolName: string, enabled: boolean) => void;
+  getMcpServerTools: (serverId: string) => McpTool[];
   currentBackend: string;
   onBackendChange: (backend: string) => void;
   codexWorkingDir: string | null;
@@ -101,6 +103,8 @@ function SettingsModalInner({
   onMcpRemove,
   onMcpRestart,
   onMcpToggle,
+  onMcpToolToggle,
+  getMcpServerTools,
   currentBackend,
   onBackendChange,
   codexWorkingDir,
@@ -110,6 +114,7 @@ function SettingsModalInner({
   const [mcpFormOpen, setMcpFormOpen] = useState(false);
   const [mcpEditId, setMcpEditId] = useState<string | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const [mcpToolsOpenId, setMcpToolsOpenId] = useState<string | null>(null);
 
   // Status lookup by id; the MCP list renders from `mcpConfigs` and decorates
   // each row with its live status (if the manager has reported one).
@@ -162,7 +167,7 @@ function SettingsModalInner({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="px-10 py-10 sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription className="sr-only">
@@ -170,7 +175,11 @@ function SettingsModalInner({
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue={isCodex ? "backend" : "providers"} className="w-full">
+        {/* min-w-0: as a grid item of DialogContent, Tabs must be allowed to
+            shrink below its content's intrinsic width — otherwise one long
+            nowrap line (an MCP tool description) forces the whole pane wider
+            than the dialog and every `truncate` below is defeated. */}
+        <Tabs defaultValue={isCodex ? "backend" : "providers"} className="w-full min-w-0">
           <TabsList className="w-full">
             <TabsTrigger value="backend">Backend</TabsTrigger>
             {!isCodex ? <TabsTrigger value="providers">Providers</TabsTrigger> : null}
@@ -285,10 +294,30 @@ function SettingsModalInner({
                           <StatusBadge kind={kind} />
                           {kind === "connected" && typeof status?.toolCount === "number" ? (
                             <span className="text-muted-foreground">
-                              ({status.toolCount} {status.toolCount === 1 ? "tool" : "tools"})
+                              ({status.toolCount} {status.toolCount === 1 ? "tool" : "tools"}
+                              {config.disabledTools?.length
+                                ? `, ${config.disabledTools.length} off`
+                                : ""}
+                              )
                             </span>
                           ) : null}
                           <span className="ml-auto flex shrink-0 gap-1">
+                            {kind === "connected" && status?.toolCount ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-1.5 text-xs"
+                                title="Enable or disable individual tools"
+                                onClick={() =>
+                                  setMcpToolsOpenId((prev) =>
+                                    prev === config.id ? null : config.id,
+                                  )
+                                }
+                              >
+                                Tools
+                              </Button>
+                            ) : null}
                             {isStdio ? (
                               <Button
                                 type="button"
@@ -329,6 +358,15 @@ function SettingsModalInner({
                           <p className="break-words pl-9 text-[11px] text-destructive">
                             {status.error}
                           </p>
+                        ) : null}
+                        {mcpToolsOpenId === config.id && kind === "connected" ? (
+                          <McpToolList
+                            tools={getMcpServerTools(config.id)}
+                            disabledTools={config.disabledTools}
+                            onToggle={(toolName, enabled) =>
+                              onMcpToolToggle(config.id, toolName, enabled)
+                            }
+                          />
                         ) : null}
                       </li>
                     );
@@ -495,6 +533,55 @@ function CodexBackendPanel({
         Codex authenticates via your <code>codex login</code> session; no key is stored here.
       </div>
     </section>
+  );
+}
+
+/**
+ * Expandable per-tool toggle list for one connected MCP server (BACKLOG #18).
+ * Renders the UNFILTERED tool list — disabled tools must stay visible to be
+ * re-enabled — with a switch per tool. Toggling is a read-time filter applied
+ * without restarting the server; disabled tools stop riding along in the
+ * model's tools payload (token frugality).
+ */
+function McpToolList({
+  tools,
+  disabledTools,
+  onToggle,
+}: {
+  tools: McpTool[];
+  disabledTools: string[] | undefined;
+  onToggle: (toolName: string, enabled: boolean) => void;
+}) {
+  const disabled = new Set(disabledTools ?? []);
+  if (tools.length === 0) {
+    return <p className="pl-9 text-[11px] text-muted-foreground">No tools reported.</p>;
+  }
+  return (
+    <ul className="ml-9 space-y-1 border-l border-border pl-3">
+      {tools.map((t) => {
+        const isOn = !disabled.has(t.name);
+        return (
+          <li key={t.name} className="flex min-w-0 items-center gap-2">
+            <Switch
+              checked={isOn}
+              onCheckedChange={(v) => onToggle(t.name, v)}
+              aria-label={isOn ? `Disable tool ${t.name}` : `Enable tool ${t.name}`}
+            />
+            <span className="shrink-0 font-mono text-foreground">{t.name}</span>
+            {t.description ? (
+              // min-w-0 lets this flex child shrink so `truncate` can clip it;
+              // without it the nowrap text forces the dialog wider than max-w.
+              <span
+                className="min-w-0 truncate text-[11px] text-muted-foreground"
+                title={t.description}
+              >
+                {t.description}
+              </span>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

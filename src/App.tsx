@@ -61,6 +61,8 @@ function App() {
     handleMcpRemove,
     handleMcpRestart,
     handleMcpToggle,
+    handleMcpToolToggle,
+    getMcpServerTools,
   } = useMcpServers({ onToast: mcpToast });
   const {
     providerStates,
@@ -477,6 +479,8 @@ function App() {
           onMcpRemove={handleMcpRemove}
           onMcpRestart={handleMcpRestart}
           onMcpToggle={handleMcpToggle}
+          onMcpToolToggle={handleMcpToolToggle}
+          getMcpServerTools={getMcpServerTools}
           currentBackend={settings.default_backend}
           onBackendChange={handleBackendChange}
           codexWorkingDir={settings.codex_working_dir}
