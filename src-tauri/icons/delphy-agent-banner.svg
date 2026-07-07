@@ -1,0 +1,131 @@
+<svg width="1600" height="600" viewBox="0 0 1600 600" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a0812"/><stop offset="0.5" stop-color="#120e26"/><stop offset="1" stop-color="#0a0715"/></linearGradient>
+<radialGradient id="centerGlow" cx="0.5" cy="0.42" r="0.55"><stop offset="0" stop-color="#2a1f5e" stop-opacity="0.9"/><stop offset="1" stop-color="#2a1f5e" stop-opacity="0"/></radialGradient>
+<radialGradient id="logoGlow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#19e6ff" stop-opacity="0.32"/><stop offset="0.6" stop-color="#8b6bff" stop-opacity="0.15"/><stop offset="1" stop-color="#19e6ff" stop-opacity="0"/></radialGradient>
+<linearGradient id="wm" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#19e6ff"/><stop offset="0.5" stop-color="#c9b6ff"/><stop offset="1" stop-color="#ff3fd0"/></linearGradient>
+<radialGradient id="lg-cyan" cx="0.1" cy="0.1" r="0.6"><stop offset="0" stop-color="#00ffff" stop-opacity="0.9"/><stop offset="1" stop-color="#00ffff" stop-opacity="0"/></radialGradient>
+<radialGradient id="lg-mag" cx="0.9" cy="0.1" r="0.6"><stop offset="0" stop-color="#ff00ff" stop-opacity="0.9"/><stop offset="1" stop-color="#ff00ff" stop-opacity="0"/></radialGradient>
+<radialGradient id="lg-wht" cx="0.1" cy="0.9" r="0.6"><stop offset="0" stop-color="#ffffff" stop-opacity="0.7"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+<radialGradient id="lg-yel" cx="0.9" cy="0.9" r="0.6"><stop offset="0" stop-color="#ffff00" stop-opacity="0.9"/><stop offset="1" stop-color="#ffff00" stop-opacity="0"/></radialGradient>
+<linearGradient id="lg-base" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1a1a2e"/><stop offset="1" stop-color="#16213e"/></linearGradient>
+<pattern id="hex" width="83.14" height="144.00" patternUnits="userSpaceOnUse">
+<path d="M0.00,-48.00 L41.57,-24.00 L41.57,24.00 L0.00,48.00 L-41.57,24.00 L-41.57,-24.00 Z" fill="none" stroke="#8b6bff" stroke-width="1" opacity="0.07"/>
+<path d="M41.57,24.00 L83.14,48.00 L83.14,96.00 L41.57,120.00 L0.00,96.00 L0.00,48.00 Z" fill="none" stroke="#8b6bff" stroke-width="1" opacity="0.07"/>
+</pattern>
+</defs>
+<rect width="1600" height="600" fill="url(#bg)"/>
+<rect width="1600" height="600" fill="url(#hex)"/>
+<rect width="1600" height="600" fill="url(#centerGlow)"/>
+<text x="270.0" y="410.9" font-size="18" fill="#8b6bff" opacity="0.2">1</text>
+<text x="1518.5" y="128.4" font-size="13" fill="#19e6ff" opacity="0.11">0</text>
+<text x="120.3" y="468.9" font-size="14" fill="#19e6ff" opacity="0.12">0</text>
+<text x="1217.4" y="253.0" font-size="13" fill="#ff3fd0" opacity="0.13">1</text>
+<text x="1026.7" y="549.4" font-size="14" fill="#19e6ff" opacity="0.07">0</text>
+<text x="720.7" y="334.0" font-size="18" fill="#7fd8ff" opacity="0.07">1</text>
+<text x="747.0" y="483.6" font-size="14" fill="#8b6bff" opacity="0.15">0</text>
+<text x="1041.1" y="555.7" font-size="13" fill="#7fd8ff" opacity="0.13">0</text>
+<text x="545.7" y="107.6" font-size="16" fill="#ff3fd0" opacity="0.19">1</text>
+<text x="509.3" y="296.3" font-size="13" fill="#19e6ff" opacity="0.07">1</text>
+<text x="1548.5" y="27.6" font-size="20" fill="#8b6bff" opacity="0.14">0</text>
+<text x="1544.7" y="88.9" font-size="22" fill="#ff3fd0" opacity="0.18">0</text>
+<text x="1203.5" y="544.8" font-size="13" fill="#8b6bff" opacity="0.06">0</text>
+<text x="1227.3" y="235.2" font-size="22" fill="#8b6bff" opacity="0.11">0</text>
+<text x="1515.7" y="355.5" font-size="18" fill="#7fd8ff" opacity="0.15">1</text>
+<text x="396.5" y="339.5" font-size="18" fill="#7fd8ff" opacity="0.06">1</text>
+<text x="1346.6" y="393.4" font-size="18" fill="#8b6bff" opacity="0.08">0<animate attributeName="opacity" values="0.08;0.32;0.08" dur="3.5s" begin="3.6s" repeatCount="indefinite"/></text>
+<text x="1550.1" y="442.2" font-size="13" fill="#ff3fd0" opacity="0.07">1</text>
+<text x="1437.5" y="293.3" font-size="16" fill="#8b6bff" opacity="0.18">0</text>
+<text x="678.4" y="350.3" font-size="16" fill="#8b6bff" opacity="0.13">1<animate attributeName="opacity" values="0.13;0.37;0.13" dur="4.8s" begin="0.0s" repeatCount="indefinite"/></text>
+<text x="1083.8" y="558.3" font-size="16" fill="#ff3fd0" opacity="0.15">0</text>
+<text x="925.9" y="169.5" font-size="14" fill="#8b6bff" opacity="0.07">1</text>
+<text x="304.0" y="384.1" font-size="13" fill="#19e6ff" opacity="0.15">0<animate attributeName="opacity" values="0.15;0.39;0.15" dur="4.1s" begin="1.3s" repeatCount="indefinite"/></text>
+<text x="784.4" y="148.5" font-size="14" fill="#8b6bff" opacity="0.18">0<animate attributeName="opacity" values="0.18;0.42;0.18" dur="4.7s" begin="3.0s" repeatCount="indefinite"/></text>
+<text x="956.5" y="307.7" font-size="13" fill="#7fd8ff" opacity="0.12">0<animate attributeName="opacity" values="0.12;0.36;0.12" dur="4.7s" begin="0.7s" repeatCount="indefinite"/></text>
+<text x="1124.8" y="167.1" font-size="22" fill="#19e6ff" opacity="0.09">1<animate attributeName="opacity" values="0.09;0.33;0.09" dur="4.6s" begin="4.0s" repeatCount="indefinite"/></text>
+<text x="1290.7" y="474.1" font-size="20" fill="#19e6ff" opacity="0.13">1<animate attributeName="opacity" values="0.13;0.37;0.13" dur="4.3s" begin="1.3s" repeatCount="indefinite"/></text>
+<text x="820.4" y="188.7" font-size="13" fill="#ff3fd0" opacity="0.2">0</text>
+<text x="509.5" y="580.2" font-size="13" fill="#19e6ff" opacity="0.14">0</text>
+<text x="1540.8" y="307.8" font-size="22" fill="#7fd8ff" opacity="0.12">0</text>
+<text x="1381.5" y="65.3" font-size="13" fill="#7fd8ff" opacity="0.06">0<animate attributeName="opacity" values="0.06;0.3;0.06" dur="4.3s" begin="1.6s" repeatCount="indefinite"/></text>
+<text x="679.9" y="471.1" font-size="18" fill="#ff3fd0" opacity="0.12">1</text>
+<text x="1518.3" y="73.7" font-size="14" fill="#7fd8ff" opacity="0.11">1</text>
+<text x="349.7" y="277.0" font-size="14" fill="#7fd8ff" opacity="0.19">1</text>
+<text x="973.4" y="486.3" font-size="14" fill="#ff3fd0" opacity="0.08">0</text>
+<text x="1132.5" y="76.6" font-size="13" fill="#ff3fd0" opacity="0.14">0</text>
+<text x="1174.0" y="574.5" font-size="22" fill="#7fd8ff" opacity="0.08">0</text>
+<text x="1015.4" y="406.4" font-size="13" fill="#19e6ff" opacity="0.1">1<animate attributeName="opacity" values="0.1;0.34;0.1" dur="5.0s" begin="0.6s" repeatCount="indefinite"/></text>
+<text x="1077.3" y="137.5" font-size="22" fill="#7fd8ff" opacity="0.07">1</text>
+<text x="640.2" y="283.1" font-size="22" fill="#8b6bff" opacity="0.15">1</text>
+<text x="166.8" y="570.1" font-size="13" fill="#ff3fd0" opacity="0.17">0</text>
+<text x="1114.0" y="36.6" font-size="18" fill="#7fd8ff" opacity="0.16">0<animate attributeName="opacity" values="0.16;0.4;0.16" dur="2.6s" begin="2.2s" repeatCount="indefinite"/></text>
+<text x="159.8" y="198.4" font-size="16" fill="#19e6ff" opacity="0.11">1<animate attributeName="opacity" values="0.11;0.35;0.11" dur="4.8s" begin="3.3s" repeatCount="indefinite"/></text>
+<text x="840.0" y="53.4" font-size="18" fill="#7fd8ff" opacity="0.18">0<animate attributeName="opacity" values="0.18;0.42;0.18" dur="4.2s" begin="3.3s" repeatCount="indefinite"/></text>
+<text x="926.3" y="287.0" font-size="22" fill="#19e6ff" opacity="0.06">0</text>
+<text x="1180.2" y="449.7" font-size="14" fill="#19e6ff" opacity="0.12">0</text>
+<text x="849.6" y="300.2" font-size="14" fill="#ff3fd0" opacity="0.07">1</text>
+<text x="1012.9" y="31.2" font-size="22" fill="#19e6ff" opacity="0.08">0<animate attributeName="opacity" values="0.08;0.32;0.08" dur="4.9s" begin="1.4s" repeatCount="indefinite"/></text>
+<text x="563.1" y="116.5" font-size="16" fill="#7fd8ff" opacity="0.07">1<animate attributeName="opacity" values="0.07;0.31;0.07" dur="5.2s" begin="2.2s" repeatCount="indefinite"/></text>
+<text x="650.8" y="411.5" font-size="13" fill="#ff3fd0" opacity="0.17">1<animate attributeName="opacity" values="0.17;0.41;0.17" dur="2.7s" begin="1.4s" repeatCount="indefinite"/></text>
+<text x="844.9" y="376.6" font-size="13" fill="#ff3fd0" opacity="0.12">0<animate attributeName="opacity" values="0.12;0.36;0.12" dur="5.0s" begin="3.2s" repeatCount="indefinite"/></text>
+<text x="1429.6" y="405.1" font-size="22" fill="#19e6ff" opacity="0.2">0</text>
+<text x="1485.0" y="548.7" font-size="13" fill="#ff3fd0" opacity="0.08">1<animate attributeName="opacity" values="0.08;0.32;0.08" dur="2.7s" begin="1.5s" repeatCount="indefinite"/></text>
+<text x="1182.7" y="127.7" font-size="14" fill="#8b6bff" opacity="0.2">1</text>
+<text x="1225.0" y="438.9" font-size="13" fill="#8b6bff" opacity="0.11">1<animate attributeName="opacity" values="0.11;0.35;0.11" dur="4.1s" begin="3.3s" repeatCount="indefinite"/></text>
+<text x="578.5" y="99.1" font-size="18" fill="#19e6ff" opacity="0.2">0</text>
+<text x="1172.1" y="144.7" font-size="20" fill="#ff3fd0" opacity="0.07">1<animate attributeName="opacity" values="0.07;0.31;0.07" dur="3.8s" begin="2.6s" repeatCount="indefinite"/></text>
+<text x="1217.7" y="445.3" font-size="16" fill="#8b6bff" opacity="0.11">0</text>
+<text x="777.7" y="174.1" font-size="14" fill="#19e6ff" opacity="0.17">1</text>
+<text x="700.6" y="194.5" font-size="22" fill="#8b6bff" opacity="0.2">0</text>
+<text x="627.6" y="28.1" font-size="20" fill="#7fd8ff" opacity="0.08">1<animate attributeName="opacity" values="0.08;0.32;0.08" dur="4.7s" begin="3.2s" repeatCount="indefinite"/></text>
+<text x="767.2" y="56.7" font-size="14" fill="#7fd8ff" opacity="0.1">1</text>
+<text x="891.9" y="276.0" font-size="16" fill="#19e6ff" opacity="0.11">0<animate attributeName="opacity" values="0.11;0.35;0.11" dur="4.8s" begin="3.2s" repeatCount="indefinite"/></text>
+<text x="1463.6" y="136.9" font-size="13" fill="#ff3fd0" opacity="0.09">1<animate attributeName="opacity" values="0.09;0.33;0.09" dur="4.7s" begin="3.7s" repeatCount="indefinite"/></text>
+<text x="175.0" y="370.3" font-size="20" fill="#8b6bff" opacity="0.07">0</text>
+<text x="786.5" y="43.9" font-size="22" fill="#ff3fd0" opacity="0.05">1</text>
+<text x="455.7" y="172.4" font-size="13" fill="#19e6ff" opacity="0.16">1</text>
+<text x="811.2" y="582.0" font-size="20" fill="#7fd8ff" opacity="0.12">0</text>
+<text x="870.3" y="267.3" font-size="22" fill="#ff3fd0" opacity="0.07">0</text>
+<text x="705.9" y="387.5" font-size="18" fill="#8b6bff" opacity="0.05">0</text>
+<text x="723.5" y="149.5" font-size="16" fill="#7fd8ff" opacity="0.07">0<animate attributeName="opacity" values="0.07;0.31;0.07" dur="3.4s" begin="2.8s" repeatCount="indefinite"/></text>
+<text x="480.1" y="564.2" font-size="14" fill="#8b6bff" opacity="0.07">1</text>
+<text x="1337.3" y="149.3" font-size="14" fill="#19e6ff" opacity="0.14">0<animate attributeName="opacity" values="0.14;0.38;0.14" dur="2.9s" begin="2.8s" repeatCount="indefinite"/></text>
+<text x="337.7" y="36.0" font-size="14" fill="#19e6ff" opacity="0.09">0</text>
+<text x="1245.4" y="544.1" font-size="18" fill="#ff3fd0" opacity="0.19">0</text>
+<text x="1086.5" y="519.5" font-size="13" fill="#7fd8ff" opacity="0.06">1</text>
+<text x="1273.4" y="295.0" font-size="22" fill="#19e6ff" opacity="0.17">0<animate attributeName="opacity" values="0.17;0.41;0.17" dur="3.9s" begin="1.0s" repeatCount="indefinite"/></text>
+<text x="1302.3" y="187.3" font-size="22" fill="#7fd8ff" opacity="0.15">1</text>
+<text x="1265.1" y="55.8" font-size="20" fill="#19e6ff" opacity="0.12">1</text>
+<text x="227.8" y="428.4" font-size="16" fill="#7fd8ff" opacity="0.07">1</text>
+<text x="704.2" y="155.2" font-size="22" fill="#7fd8ff" opacity="0.13">1<animate attributeName="opacity" values="0.13;0.37;0.13" dur="5.3s" begin="0.9s" repeatCount="indefinite"/></text>
+<text x="1393.3" y="430.9" font-size="18" fill="#ff3fd0" opacity="0.14">0</text>
+<text x="1216.9" y="36.4" font-size="14" fill="#19e6ff" opacity="0.08">0<animate attributeName="opacity" values="0.08;0.32;0.08" dur="5.3s" begin="0.1s" repeatCount="indefinite"/></text>
+<text x="1221.8" y="500.4" font-size="14" fill="#ff3fd0" opacity="0.13">1</text>
+<text x="450.1" y="357.6" font-size="22" fill="#ff3fd0" opacity="0.12">0</text>
+<text x="1406.2" y="498.2" font-size="16" fill="#19e6ff" opacity="0.18">0<animate attributeName="opacity" values="0.18;0.42;0.18" dur="5.4s" begin="1.3s" repeatCount="indefinite"/></text>
+<text x="606.0" y="570.8" font-size="22" fill="#7fd8ff" opacity="0.05">0</text>
+<text x="1445.0" y="144.2" font-size="13" fill="#19e6ff" opacity="0.18">0</text>
+<text x="1542.3" y="304.6" font-size="14" fill="#7fd8ff" opacity="0.11">0</text>
+<text x="1216.2" y="315.8" font-size="14" fill="#19e6ff" opacity="0.16">0<animate attributeName="opacity" values="0.16;0.4;0.16" dur="2.9s" begin="1.9s" repeatCount="indefinite"/></text>
+<text x="128.5" y="208.9" font-size="20" fill="#ff3fd0" opacity="0.15">0</text>
+<text x="467.7" y="453.9" font-size="16" fill="#ff3fd0" opacity="0.05">0</text>
+<text x="1250.5" y="515.7" font-size="22" fill="#ff3fd0" opacity="0.18">1<animate attributeName="opacity" values="0.18;0.42;0.18" dur="3.6s" begin="2.1s" repeatCount="indefinite"/></text>
+<text x="1030.8" y="377.7" font-size="22" fill="#8b6bff" opacity="0.17">0<animate attributeName="opacity" values="0.17;0.41;0.17" dur="4.8s" begin="0.0s" repeatCount="indefinite"/></text>
+<text x="544.5" y="119.1" font-size="22" fill="#8b6bff" opacity="0.13">1<animate attributeName="opacity" values="0.13;0.37;0.13" dur="2.7s" begin="1.3s" repeatCount="indefinite"/></text>
+<line x1="0" y1="2" x2="1600" y2="2" stroke="#8b6bff" stroke-width="2" opacity="0.5"/>
+<line x1="0" y1="598" x2="1600" y2="598" stroke="#8b6bff" stroke-width="2" opacity="0.5"/>
+<g transform="translate(702.0,150) scale(1.6333)">
+<circle cx="60" cy="60" r="94" fill="url(#logoGlow)"/>
+<rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-base)"/>
+<rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-cyan)"/>
+<rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-mag)"/>
+<rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-wht)"/>
+<rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-yel)"/>
+<rect x="19.83" y="19.83" width="80.34" height="80.34" rx="14.89" fill="#000"/>
+<ellipse cx="40.85" cy="53.61" rx="6" ry="6" fill="#fff"><animate attributeName="ry" values="6;6;0.5;6;6" keyTimes="0;0.90;0.94;0.98;1" dur="3s" calcMode="linear" repeatCount="indefinite"/></ellipse>
+<ellipse cx="79.85" cy="53.61" rx="6" ry="6" fill="#fff"><animate attributeName="ry" values="6;6;0.5;6;6" keyTimes="0;0.90;0.94;0.98;1" dur="3s" calcMode="linear" repeatCount="indefinite"/></ellipse>
+</g>
+<text x="800.0" y="424" text-anchor="middle" font-size="62" font-weight="bold" letter-spacing="14" fill="none" stroke="#ffffff" stroke-width="2.4" opacity="0.10">DELPHY AGENT</text>
+<text x="800.0" y="424" text-anchor="middle" font-size="62" font-weight="bold" letter-spacing="14" fill="url(#wm)">DELPHY AGENT</text>
+<line x1="650.0" y1="458" x2="950.0" y2="458" stroke="url(#wm)" stroke-width="1.5" opacity="0.5"/>
+</svg>
