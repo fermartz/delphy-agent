@@ -115,7 +115,6 @@
 <line x1="0" y1="2" x2="1600" y2="2" stroke="#8b6bff" stroke-width="2" opacity="0.5"/>
 <line x1="0" y1="598" x2="1600" y2="598" stroke="#8b6bff" stroke-width="2" opacity="0.5"/>
 <g transform="translate(702.0,150) scale(1.6333)">
-<circle cx="60" cy="60" r="94" fill="url(#logoGlow)"/>
 <rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-base)"/>
 <rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-cyan)"/>
 <rect x="7.5" y="7.5" width="105" height="105" rx="14.89" fill="url(#lg-mag)"/>
@@ -126,6 +125,6 @@
 <ellipse cx="79.85" cy="53.61" rx="6" ry="6" fill="#fff"><animate attributeName="ry" values="6;6;0.5;6;6" keyTimes="0;0.90;0.94;0.98;1" dur="3s" calcMode="linear" repeatCount="indefinite"/></ellipse>
 </g>
 <text x="800.0" y="424" text-anchor="middle" font-size="62" font-weight="bold" letter-spacing="14" fill="none" stroke="#ffffff" stroke-width="2.4" opacity="0.10">DELPHY AGENT</text>
-<text x="800.0" y="424" text-anchor="middle" font-size="62" font-weight="bold" letter-spacing="14" fill="url(#wm)">DELPHY AGENT</text>
+<text x="800.0" y="424" text-anchor="middle" font-size="62" font-weight="bold" letter-spacing="14" fill="#ffffff">DELPHY AGENT</text>
 <line x1="650.0" y1="458" x2="950.0" y2="458" stroke="url(#wm)" stroke-width="1.5" opacity="0.5"/>
 </svg>
