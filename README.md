@@ -2,8 +2,6 @@
   <img src="src-tauri/icons/delphy-agent-banner.svg" alt="Delphy Agent" width="100%" />
 </p>
 
-# Delphy Agent
-
 A desktop-first **agent hub** that gives you one interface to drive multiple AI backends — agent CLIs (Codex today; Claude Code planned) and direct LLM APIs (Claude, OpenAI, Gemini, xAI, OpenRouter, Kimi, DeepSeek, Groq) — and extends every backend through **MCP-based plugins**. Built with Tauri v2, React 19, and TypeScript.
 
 > **Pre-v1, but well past prototype.** Multi-provider direct-API chat, MCP plugins (local + remote), SQLite session persistence, context compaction, and a theme system are all working. No release builds, code signing, or auto-updater yet — see [Status and stability](#status-and-stability).
